@@ -112,7 +112,7 @@ internal static class DirectShowInterop
         try
         {
             Guid propertyBagGuid = typeof(IPropertyBag).GUID;
-            moniker.BindToStorage(null, null, ref propertyBagGuid, out object bagObj);
+            moniker.BindToStorage(null!, null!, ref propertyBagGuid, out object bagObj);
             if (bagObj is IPropertyBag bag)
             {
                 int hr = bag.Read("FriendlyName", out object value, IntPtr.Zero);
