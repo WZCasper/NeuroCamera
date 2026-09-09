@@ -21,16 +21,11 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Restore
-        run: dotnet restore NeuroCamera/NeuroCamera.csproj
-
       - name: Publish self-contained win-x64 build
-        run: >
-          dotnet publish NeuroCamera/NeuroCamera.csproj
-          -c Release
-          -r win-x64
-          --self-contained true
-          -o publish
+        shell: pwsh
+        run: |
+          dotnet publish NeuroCamera/NeuroCamera.csproj -c Release -r win-x64 --self-contained true -o publish 2>&1 | Tee-Object -FilePath build-log.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package as zip
         shell: pwsh
@@ -57,3 +52,16 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save build log for diagnostics (always)
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "ci-log-bot"
+          git config user.email "ci@neurocamera.local"
+          if (-not (Test-Path build-log.txt)) { "no build-log.txt produced" | Out-File build-log.txt }
+          git checkout --orphan ci-logs-tmp
+          git rm -rf --cached . *> $null
+          git add build-log.txt
+          git commit -m "CI log for run ${{ github.run_id }} (${{ job.status }})"
+          git push origin ci-logs-tmp:ci-logs --force
