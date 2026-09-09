@@ -1,0 +1,59 @@
+name: Build NeuroCamera
+
+"on":
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore NeuroCamera/NeuroCamera.csproj
+
+      - name: Publish self-contained win-x64 build
+        run: >
+          dotnet publish NeuroCamera/NeuroCamera.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -o publish
+
+      - name: Package as zip
+        shell: pwsh
+        run: Compress-Archive -Path publish\* -DestinationPath NeuroCamera-win-x64.zip -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeuroCamera-win-x64
+          path: NeuroCamera-win-x64.zip
+          retention-days: 30
+
+      - name: Publish "latest" release with the exe attached
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "NeuroCamera - latest build"
+          body: |
+            Автоматическая сборка из коммита ${{ github.sha }}.
+            Скачайте `NeuroCamera-win-x64.zip`, распакуйте и запустите `NeuroCamera.exe`.
+            Отдельная установка .NET не требуется (self-contained сборка).
+            Для вывода в виртуальную камеру нужен драйвер UnityCapture — см. README.
+          files: NeuroCamera-win-x64.zip
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

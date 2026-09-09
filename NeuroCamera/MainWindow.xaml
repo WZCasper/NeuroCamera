@@ -1,0 +1,134 @@
+<Window x:Class="NeuroCamera.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:common="clr-namespace:NeuroCamera.Common"
+        Title="NeuroCamera"
+        Width="1180" Height="760"
+        MinWidth="980" MinHeight="640"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BrushBackground}"
+        FontFamily="Segoe UI">
+
+    <Window.Resources>
+        <common:NullToVisibilityConverter x:Key="NullToVisibilityConverter"/>
+        <common:StringToVisibilityConverter x:Key="StringToVisibilityConverter"/>
+    </Window.Resources>
+
+    <Grid Margin="28">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===================== Header ===================== -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,22">
+            <Border Width="6" Height="40" CornerRadius="3" Background="{StaticResource BrushAccentGradient}"/>
+            <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                <TextBlock Text="NeuroCamera" FontSize="26" FontWeight="Bold"/>
+                <TextBlock Text="Автоматическая нейрокоррекция изображения в реальном времени"
+                           Foreground="{StaticResource BrushTextSecondary}" FontSize="13"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- ===================== Main content ===================== -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="24"/>
+                <ColumnDefinition Width="380"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ===== Preview panel ===== -->
+            <Border Grid.Column="0" Background="{StaticResource BrushPanel}" CornerRadius="16" Padding="2">
+                <Grid>
+                    <Border CornerRadius="14" Background="Black" ClipToBounds="True">
+                        <Image Source="{Binding PreviewFrame}"
+                               Stretch="Uniform"
+                               Visibility="{Binding PreviewFrame, Converter={StaticResource NullToVisibilityConverter}, ConverterParameter=Invert}"/>
+                    </Border>
+
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Visibility="{Binding PreviewFrame, Converter={StaticResource NullToVisibilityConverter}}">
+                        <TextBlock Text="Нет сигнала" FontSize="16" Margin="0,0,0,4"
+                                   Foreground="{StaticResource BrushTextSecondary}" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Выберите камеру и нажмите «Включить поток»" FontSize="12"
+                                   Foreground="{StaticResource BrushTextDisabled}" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ===== Control panel ===== -->
+            <Border Grid.Column="2" Background="{StaticResource BrushPanel}" CornerRadius="16" Padding="22">
+                <StackPanel>
+
+                    <!-- Camera selector -->
+                    <TextBlock Text="ИСТОЧНИК ВИДЕО" FontSize="11" FontWeight="Bold"
+                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,0,0,8"/>
+                    <ComboBox ItemsSource="{Binding Cameras}"
+                              SelectedItem="{Binding SelectedCamera}"
+                              DisplayMemberPath="Name"
+                              Height="42"/>
+
+                    <Button Content="{Binding StreamButtonText}"
+                            Command="{Binding ToggleStreamCommand}"
+                            Style="{StaticResource SecondaryButton}"
+                            Margin="0,12,0,0"
+                            HorizontalAlignment="Stretch"/>
+
+                    <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,20"/>
+
+                    <!-- Autotune -->
+                    <Button Content="⚡ АВТОНАСТРОЙКА"
+                            Command="{Binding AutoTuneCommand}"
+                            Style="{StaticResource AccentButton}"
+                            HorizontalAlignment="Stretch"
+                            FontSize="16"/>
+
+                    <TextBlock Text="15 секунд: баланс белого → экспозиция лица → шумоподавление"
+                               Foreground="{StaticResource BrushTextDisabled}" FontSize="11"
+                               TextWrapping="Wrap" Margin="0,8,0,18" HorizontalAlignment="Center"
+                               TextAlignment="Center"/>
+
+                    <ProgressBar Value="{Binding CalibrationProgress, Mode=OneWay}" Minimum="0" Maximum="100"/>
+
+                    <TextBlock Text="{Binding CalibrationStatusText}"
+                               Foreground="{StaticResource BrushTextPrimary}" FontSize="13"
+                               TextWrapping="Wrap" Margin="0,10,0,0"/>
+
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="1. Баланс белого" FontSize="10" TextAlignment="Left"
+                                   Foreground="{StaticResource BrushTextDisabled}" TextWrapping="Wrap"/>
+                        <TextBlock Grid.Column="1" Text="2. Экспозиция лица" FontSize="10" TextAlignment="Center"
+                                   Foreground="{StaticResource BrushTextDisabled}" TextWrapping="Wrap"/>
+                        <TextBlock Grid.Column="2" Text="3. Шумоподавление" FontSize="10" TextAlignment="Right"
+                                   Foreground="{StaticResource BrushTextDisabled}" TextWrapping="Wrap"/>
+                    </Grid>
+
+                    <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
+
+                    <!-- Virtual camera status -->
+                    <TextBlock Text="ВИРТУАЛЬНАЯ КАМЕРА" FontSize="11" FontWeight="Bold"
+                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,0,0,8"/>
+                    <Border Background="{StaticResource BrushPanelAlt}" CornerRadius="10" Padding="12">
+                        <TextBlock Text="{Binding VirtualCameraStatusText}"
+                                   FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource BrushTextSecondary}"/>
+                    </Border>
+
+                    <!-- Error banner -->
+                    <Border Background="#2A1518" CornerRadius="10" Padding="12" Margin="0,14,0,0"
+                            Visibility="{Binding ErrorText, Converter={StaticResource StringToVisibilityConverter}}">
+                        <TextBlock Text="{Binding ErrorText}" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource BrushDanger}"/>
+                    </Border>
+
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

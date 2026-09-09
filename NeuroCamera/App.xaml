@@ -1,0 +1,213 @@
+<Application x:Class="NeuroCamera.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+
+            <!-- ===================== Palette ===================== -->
+            <SolidColorBrush x:Key="BrushBackground"      Color="#0F1115"/>
+            <SolidColorBrush x:Key="BrushPanel"            Color="#1B1E24"/>
+            <SolidColorBrush x:Key="BrushPanelAlt"         Color="#20242C"/>
+            <SolidColorBrush x:Key="BrushBorder"           Color="#2C313A"/>
+            <SolidColorBrush x:Key="BrushAccent"           Color="#7C4DFF"/>
+            <SolidColorBrush x:Key="BrushAccentHover"      Color="#9270FF"/>
+            <SolidColorBrush x:Key="BrushAccentPressed"    Color="#6A3EE0"/>
+            <SolidColorBrush x:Key="BrushCyan"             Color="#00E5FF"/>
+            <SolidColorBrush x:Key="BrushDanger"           Color="#FF5C6C"/>
+            <SolidColorBrush x:Key="BrushDangerHover"      Color="#FF7482"/>
+            <SolidColorBrush x:Key="BrushTextPrimary"      Color="#EDEEF2"/>
+            <SolidColorBrush x:Key="BrushTextSecondary"    Color="#9AA0AC"/>
+            <SolidColorBrush x:Key="BrushTextDisabled"     Color="#5B606B"/>
+
+            <LinearGradientBrush x:Key="BrushAccentGradient" StartPoint="0,0" EndPoint="1,0">
+                <GradientStop Color="#7C4DFF" Offset="0"/>
+                <GradientStop Color="#00E5FF" Offset="1"/>
+            </LinearGradientBrush>
+
+            <!-- ===================== Base text ===================== -->
+            <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{StaticResource BrushTextPrimary}"/>
+                <Setter Property="FontFamily" Value="Segoe UI"/>
+            </Style>
+
+            <!-- ===================== Buttons ===================== -->
+            <Style x:Key="AccentButton" TargetType="Button">
+                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="FontFamily" Value="Segoe UI Semibold"/>
+                <Setter Property="FontSize" Value="15"/>
+                <Setter Property="Padding" Value="18,12"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Background" Value="{StaticResource BrushAccentGradient}"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="10">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#7C4DFF" BlurRadius="18" ShadowDepth="0" Opacity="0.45"/>
+                                </Border.Effect>
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Root" Property="Opacity" Value="0.92"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Root" Property="Opacity" Value="0.8"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="Root" Property="Background" Value="{StaticResource BrushBorder}"/>
+                                    <Setter Property="Foreground" Value="{StaticResource BrushTextDisabled}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="SecondaryButton" TargetType="Button">
+                <Setter Property="Foreground" Value="{StaticResource BrushTextPrimary}"/>
+                <Setter Property="FontFamily" Value="Segoe UI"/>
+                <Setter Property="FontSize" Value="14"/>
+                <Setter Property="Padding" Value="16,10"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Background" Value="{StaticResource BrushPanelAlt}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource BrushBorder}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Root"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="10">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Root" Property="BorderBrush" Value="{StaticResource BrushAccent}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Foreground" Value="{StaticResource BrushTextDisabled}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- ===================== ComboBox ===================== -->
+            <Style TargetType="ComboBoxItem">
+                <Setter Property="Padding" Value="10,8"/>
+                <Setter Property="Foreground" Value="{StaticResource BrushTextPrimary}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBoxItem">
+                            <Border x:Name="Root" Background="Transparent" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsHighlighted" Value="True">
+                                    <Setter TargetName="Root" Property="Background" Value="{StaticResource BrushPanelAlt}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style TargetType="ComboBox">
+                <Setter Property="Foreground" Value="{StaticResource BrushTextPrimary}"/>
+                <Setter Property="Background" Value="{StaticResource BrushPanelAlt}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource BrushBorder}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Padding" Value="12,10"/>
+                <Setter Property="FontSize" Value="14"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBox">
+                            <Grid>
+                                <ToggleButton x:Name="ToggleHost"
+                                              Focusable="False"
+                                              ClickMode="Press"
+                                              IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border Background="{StaticResource BrushPanelAlt}"
+                                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                                    CornerRadius="10">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Path Grid.Column="1" Margin="0,0,14,0"
+                                                          Data="M0,0 L8,0 4,5 Z"
+                                                          Fill="{StaticResource BrushTextSecondary}"
+                                                          VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                </ToggleButton>
+                                <ContentPresenter x:Name="ContentSite"
+                                                   IsHitTestVisible="False"
+                                                   Content="{TemplateBinding SelectionBoxItem}"
+                                                   ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                                   Margin="{TemplateBinding Padding}"
+                                                   VerticalAlignment="Center"
+                                                   HorizontalAlignment="Left"/>
+                                <Popup x:Name="Popup"
+                                       Placement="Bottom"
+                                       IsOpen="{TemplateBinding IsDropDownOpen}"
+                                       AllowsTransparency="True"
+                                       Focusable="False"
+                                       PopupAnimation="Slide">
+                                    <Border Background="{StaticResource BrushPanel}"
+                                            BorderBrush="{StaticResource BrushBorder}"
+                                            BorderThickness="1"
+                                            CornerRadius="10"
+                                            Margin="0,4,0,0"
+                                            MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                            MaxHeight="240">
+                                        <ScrollViewer Margin="4">
+                                            <StackPanel IsItemsHost="True"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </Popup>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- ===================== ProgressBar ===================== -->
+            <Style TargetType="ProgressBar">
+                <Setter Property="Height" Value="10"/>
+                <Setter Property="Background" Value="{StaticResource BrushPanelAlt}"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Foreground" Value="{StaticResource BrushAccent}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ProgressBar">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="5">
+                                <Grid ClipToBounds="True">
+                                    <Rectangle x:Name="PART_Track"/>
+                                    <Border x:Name="PART_Indicator"
+                                            HorizontalAlignment="Left"
+                                            Background="{StaticResource BrushAccentGradient}"
+                                            CornerRadius="5"/>
+                                </Grid>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

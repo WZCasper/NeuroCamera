@@ -1,0 +1,10 @@
+## .NET / Visual Studio
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+## Build output from CI
+/publish/
+*.zip
