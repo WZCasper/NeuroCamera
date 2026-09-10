@@ -64,25 +64,92 @@ public sealed class ImageProcessor : IDisposable
     }
 
     /// <summary>
-    /// Computes per-channel Gray-World white balance gains for a full BGR frame: assumes the
-    /// scene average should be neutral gray and derives multipliers that push each channel's
-    /// mean toward the overall gray average. Gains are clamped to avoid extreme color casts
-    /// on scenes that are naturally dominated by one color.
+    /// Pixels darker than this (0-255 gray) are treated as unreliable sensor noise floor
+    /// and excluded from the white-balance background estimate.
     /// </summary>
-    public static (double GainB, double GainG, double GainR) ComputeGrayWorldGains(Mat bgrFrame)
+    private const int BackgroundMinLuminance = 14;
+
+    /// <summary>Pixels brighter than this are treated as clipped highlights and excluded too.</summary>
+    private const int BackgroundMaxLuminance = 244;
+
+    /// <summary>
+    /// If fewer than this fraction of the frame qualifies as reliable "background" after
+    /// excluding the face and out-of-range pixels, the sample is discarded rather than
+    /// risking a gray-point estimate built from almost no real data.
+    /// </summary>
+    private const double MinBackgroundFraction = 0.03;
+
+    /// <summary>
+    /// Computes per-channel background color statistics for Gray-World white balance,
+    /// deliberately excluding the subject's face and any too-dark/too-bright pixels.
+    ///
+    /// This matters: naive whole-frame Gray-World treats the *entire* frame - including the
+    /// face - as "should average to neutral gray". Human skin is not neutral (it is
+    /// consistently red-greater-than-green-greater-than-blue), so on a face-filling or
+    /// dark-background shot the algorithm reads that natural warmth as a color cast and
+    /// "corrects" it away, turning skin visibly green/cyan - a well-documented Gray-World
+    /// failure mode for portraits and single-dominant-color scenes. Excluding the face (and
+    /// trimming the noise floor / clipped highlights, another standard robustness technique)
+    /// gives a much more trustworthy estimate of the actual ambient light color.
+    /// Returns false when too little of the frame qualifies as usable background.
+    /// </summary>
+    public static bool TryComputeBackgroundMeans(Mat bgrFrame, Rect? excludeFaceRect, out Scalar backgroundMeans)
     {
-        Cv2.MeanStdDev(bgrFrame, out Scalar mean, out _);
+        using Mat gray = new();
+        Cv2.CvtColor(bgrFrame, gray, ColorConversionCodes.BGR2GRAY);
 
-        double meanB = Math.Max(mean.Val0, 1.0);
-        double meanG = Math.Max(mean.Val1, 1.0);
-        double meanR = Math.Max(mean.Val2, 1.0);
-        double gray = (meanB + meanG + meanR) / 3.0;
+        using Mat mask = new();
+        Cv2.InRange(gray, new Scalar(BackgroundMinLuminance), new Scalar(BackgroundMaxLuminance), mask);
 
-        double gainB = Math.Clamp(gray / meanB, 0.5, 2.2);
-        double gainG = Math.Clamp(gray / meanG, 0.5, 2.2);
-        double gainR = Math.Clamp(gray / meanR, 0.5, 2.2);
+        if (excludeFaceRect is { } face)
+        {
+            Rect padded = PadRect(face, 1.3, bgrFrame.Size());
+            Cv2.Rectangle(mask, padded, Scalar.All(0), thickness: -1);
+        }
 
-        return (gainB, gainG, gainR);
+        long totalPixels = (long)bgrFrame.Width * bgrFrame.Height;
+        int validPixels = Cv2.CountNonZero(mask);
+
+        if (validPixels < totalPixels * MinBackgroundFraction)
+        {
+            backgroundMeans = default;
+            return false;
+        }
+
+        backgroundMeans = Cv2.Mean(bgrFrame, mask);
+        return true;
+    }
+
+    /// <summary>Measures the raw mean BGR color inside a region (used to sample face/skin color).</summary>
+    public static Scalar MeasureMeanColor(Mat bgrFrame, Rect roi)
+    {
+        Rect clamped = ClampRect(roi, bgrFrame.Size());
+        using Mat region = new(bgrFrame, clamped);
+        return Cv2.Mean(region);
+    }
+
+    /// <summary>
+    /// Broad, permissive check for whether a BGR color resembles a plausible human skin
+    /// tone (consistently red-greater-than-green, green-roughly-greater-than-or-near-blue
+    /// across the range of skin tones under normal light) rather than something a bad
+    /// white-balance correction pushed toward green/cyan/magenta. Used as a final safety
+    /// net on the calibrated face color, not a precise skin classifier.
+    /// </summary>
+    public static bool IsPlausibleSkinTone(Scalar bgrMean, double gainB, double gainG, double gainR)
+    {
+        double b = bgrMean.Val0 * gainB;
+        double g = bgrMean.Val1 * gainG;
+        double r = bgrMean.Val2 * gainR;
+
+        if (r < 1.0 || g < 1.0 || b < 1.0)
+        {
+            return true; // too dark to judge reliably - don't block on it
+        }
+
+        double redToGreen = r / g;
+        double greenToBlue = g / b;
+
+        return redToGreen is >= 1.0 and <= 1.9 && greenToBlue is >= 0.75 and <= 1.6;
     }
 
     /// <summary>Applies per-channel multiplicative gains (used for white balance).</summary>
@@ -146,7 +213,7 @@ public sealed class ImageProcessor : IDisposable
         double targetNorm = Math.Clamp(targetLuminance / 255.0, 0.02, 0.98);
 
         double gamma = Math.Log(currentNorm) / Math.Log(targetNorm);
-        return Math.Clamp(gamma, 0.4, 2.5);
+        return Math.Clamp(gamma, 0.6, 1.8);
     }
 
     /// <summary>Applies gamma correction via a precomputed 256-entry lookup table.</summary>
@@ -238,6 +305,16 @@ public sealed class ImageProcessor : IDisposable
         int width = Math.Clamp(rect.Width, 1, bounds.Width - x);
         int height = Math.Clamp(rect.Height, 1, bounds.Height - y);
         return new Rect(x, y, width, height);
+    }
+
+    /// <summary>Expands a rect around its center by a factor (e.g. to also cover hair/neck around a face box), clamped to bounds.</summary>
+    private static Rect PadRect(Rect rect, double factor, Size bounds)
+    {
+        int newWidth = (int)(rect.Width * factor);
+        int newHeight = (int)(rect.Height * factor);
+        int newX = rect.X - ((newWidth - rect.Width) / 2);
+        int newY = rect.Y - ((newHeight - rect.Height) / 2);
+        return ClampRect(new Rect(newX, newY, newWidth, newHeight), bounds);
     }
 
     public void Dispose()
