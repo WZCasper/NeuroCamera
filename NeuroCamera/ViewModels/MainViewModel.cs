@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using NeuroCamera.Common;
@@ -10,14 +11,19 @@ using NeuroCamera.Models;
 namespace NeuroCamera.ViewModels;
 
 /// <summary>
-/// UI-facing state and commands for <c>MainWindow</c>. Owns the <see cref="VideoEngine"/> and
-/// marshals every one of its background-thread events onto the WPF Dispatcher before touching
-/// any bindable property, so the view model itself is safe to bind directly from XAML.
+/// UI-facing state and commands for <c>MainWindow</c>. Owns the <see cref="VideoEngine"/>
+/// (software correction + preview + virtual-camera output) and, independently, a
+/// <see cref="HardwareCameraController"/> for the selected device's own driver-level
+/// properties (brightness/exposure/etc., exposed as sliders). Every background-thread event
+/// from <see cref="VideoEngine"/> is marshalled onto the WPF Dispatcher before touching any
+/// bindable property, so the view model itself is safe to bind directly from XAML.
 /// </summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private readonly VideoEngine _videoEngine;
     private readonly System.Windows.Threading.Dispatcher _dispatcher;
+
+    private HardwareCameraController? _hardwareController;
 
     private CameraDeviceInfo? _selectedCamera;
     private BitmapSource? _previewFrame;
@@ -26,6 +32,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private double _calibrationProgress;
     private string _calibrationStatusText = "Нажмите «Автонастройка», чтобы откалибровать камеру за 15 секунд.";
     private string _virtualCameraStatusText = "Виртуальная камера не подключена.";
+    private string _virtualCameraInstallStatusText = "";
+    private bool _isInstallingVirtualCamera;
     private string? _errorText;
     private bool _disposed;
 
@@ -43,11 +51,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         ToggleStreamCommand = new RelayCommand(ToggleStream, () => SelectedCamera is not null);
         AutoTuneCommand = new RelayCommand(RunAutoTune, () => IsStreaming && !IsCalibrating);
+        InstallVirtualCameraCommand = new RelayCommand(() => _ = InstallVirtualCameraAsync(), () => !IsInstallingVirtualCamera);
 
         RefreshCameras();
     }
 
     public ObservableCollection<CameraDeviceInfo> Cameras { get; } = new();
+
+    /// <summary>Live hardware camera property sliders (brightness, exposure, white balance, etc.) for the currently streaming device.</summary>
+    public ObservableCollection<CameraControlSliderViewModel> CameraControls { get; } = new();
 
     public CameraDeviceInfo? SelectedCamera
     {
@@ -60,6 +72,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (changed && IsStreaming && value is not null)
             {
                 _videoEngine.Start(value.Index);
+                RefreshHardwareControls(value.Index);
             }
         }
     }
@@ -113,6 +126,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _virtualCameraStatusText, value);
     }
 
+    public string VirtualCameraInstallStatusText
+    {
+        get => _virtualCameraInstallStatusText;
+        private set => SetProperty(ref _virtualCameraInstallStatusText, value);
+    }
+
+    public bool IsInstallingVirtualCamera
+    {
+        get => _isInstallingVirtualCamera;
+        private set
+        {
+            if (SetProperty(ref _isInstallingVirtualCamera, value))
+            {
+                RelayCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
     public string? ErrorText
     {
         get => _errorText;
@@ -123,6 +154,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public RelayCommand ToggleStreamCommand { get; }
     public RelayCommand AutoTuneCommand { get; }
+    public RelayCommand InstallVirtualCameraCommand { get; }
 
     private void RefreshCameras()
     {
@@ -149,6 +181,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IsStreaming = false;
             IsCalibrating = false;
             PreviewFrame = null;
+            ClearHardwareControls();
             return;
         }
 
@@ -160,6 +193,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ErrorText = null;
         _videoEngine.Start(SelectedCamera.Index);
         IsStreaming = true;
+        RefreshHardwareControls(SelectedCamera.Index);
     }
 
     private void RunAutoTune()
@@ -174,6 +208,45 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             ErrorText = ex.Message;
         }
+    }
+
+    /// <summary>
+    /// Opens (or reopens, for a newly selected device) the hardware property interfaces and
+    /// rebuilds the slider list from whatever the driver reports supporting. Runs entirely on
+    /// the UI thread, matching the COM apartment <see cref="DirectShowInterop"/> already uses.
+    /// </summary>
+    private void RefreshHardwareControls(int deviceIndex)
+    {
+        ClearHardwareControls();
+
+        _hardwareController = HardwareCameraController.TryOpen(deviceIndex);
+        if (_hardwareController is null)
+        {
+            return;
+        }
+
+        foreach (CameraControlSetting setting in _hardwareController.EnumerateSettings())
+        {
+            CameraControls.Add(new CameraControlSliderViewModel(_hardwareController, setting));
+        }
+    }
+
+    private void ClearHardwareControls()
+    {
+        CameraControls.Clear();
+        _hardwareController?.Dispose();
+        _hardwareController = null;
+    }
+
+    private async Task InstallVirtualCameraAsync()
+    {
+        IsInstallingVirtualCamera = true;
+        VirtualCameraInstallStatusText = "Скачиваю и устанавливаю драйвер...";
+
+        (bool _, string message) = await VirtualCameraInstaller.InstallAsync();
+
+        VirtualCameraInstallStatusText = message;
+        IsInstallingVirtualCamera = false;
     }
 
     private void OnFrameReady(object? sender, BitmapSource frame) =>
@@ -215,6 +288,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        _hardwareController?.Dispose();
         _videoEngine.Dispose();
         _disposed = true;
     }

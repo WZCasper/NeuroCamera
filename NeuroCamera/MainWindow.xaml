@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:common="clr-namespace:NeuroCamera.Common"
         Title="NeuroCamera"
+        Icon="Assets/icon.ico"
         Width="1180" Height="760"
         MinWidth="980" MinHeight="640"
         WindowStartupLocation="CenterScreen"
@@ -12,6 +13,7 @@
     <Window.Resources>
         <common:NullToVisibilityConverter x:Key="NullToVisibilityConverter"/>
         <common:StringToVisibilityConverter x:Key="StringToVisibilityConverter"/>
+        <common:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
     </Window.Resources>
 
     <Grid Margin="28">
@@ -59,7 +61,8 @@
 
             <!-- ===== Control panel ===== -->
             <Border Grid.Column="2" Background="{StaticResource BrushPanel}" CornerRadius="16" Padding="22">
-                <StackPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="0,0,10,0">
 
                     <!-- Camera selector -->
                     <TextBlock Text="ИСТОЧНИК ВИДЕО" FontSize="11" FontWeight="Bold"
@@ -120,6 +123,61 @@
                                    Foreground="{StaticResource BrushTextSecondary}"/>
                     </Border>
 
+                    <Button Content="Установить виртуальную камеру"
+                            Command="{Binding InstallVirtualCameraCommand}"
+                            Style="{StaticResource SecondaryButton}"
+                            Margin="0,10,0,0"
+                            HorizontalAlignment="Stretch"/>
+                    <TextBlock Text="Скачивает и регистрирует свободный драйвер UnityCapture (нужно один раз, потребует прав администратора)."
+                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
+                               TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding VirtualCameraInstallStatusText}"
+                               Foreground="{StaticResource BrushCyan}" FontSize="11"
+                               TextWrapping="Wrap" Margin="0,6,0,0"
+                               Visibility="{Binding VirtualCameraInstallStatusText, Converter={StaticResource StringToVisibilityConverter}}"/>
+
+                    <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
+
+                    <!-- Manual hardware camera controls -->
+                    <TextBlock Text="РУЧНЫЕ НАСТРОЙКИ КАМЕРЫ" FontSize="11" FontWeight="Bold"
+                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,0,0,8"/>
+                    <TextBlock Text="Значения приходят прямо от драйвера камеры — ровно те же цифры покажет OBS в свойствах видео."
+                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
+                               TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                    <ItemsControl ItemsSource="{Binding CameraControls}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,0,0,16">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding DisplayName}" FontSize="12"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12"
+                                                   Foreground="{StaticResource BrushTextSecondary}"/>
+                                    </Grid>
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Slider Grid.Column="0"
+                                                Minimum="{Binding Min}" Maximum="{Binding Max}"
+                                                SmallChange="{Binding Step}" LargeChange="{Binding Step}"
+                                                Value="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                VerticalAlignment="Center"/>
+                                        <CheckBox Grid.Column="1" Content="Авто" FontSize="11"
+                                                  IsChecked="{Binding IsAuto, Mode=TwoWay}"
+                                                  Margin="10,0,0,0" VerticalAlignment="Center"
+                                                  Visibility="{Binding SupportsAuto, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                    </Grid>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
                     <!-- Error banner -->
                     <Border Background="#2A1518" CornerRadius="10" Padding="12" Margin="0,14,0,0"
                             Visibility="{Binding ErrorText, Converter={StaticResource StringToVisibilityConverter}}">
@@ -128,6 +186,7 @@
                     </Border>
 
                 </StackPanel>
+                </ScrollViewer>
             </Border>
         </Grid>
     </Grid>

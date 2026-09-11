@@ -32,3 +32,21 @@ public sealed class StringToVisibilityConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
         throw new NotSupportedException();
 }
+
+/// <summary>
+/// Standard bool -&gt; Visibility. By default true -&gt; Visible; pass converter parameter
+/// "Invert" to flip it (true -&gt; Collapsed).
+/// </summary>
+public sealed class BoolToVisibilityConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        bool flag = value is bool b && b;
+        bool invert = string.Equals(parameter as string, "Invert", StringComparison.OrdinalIgnoreCase);
+        bool show = invert ? !flag : flag;
+        return show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}

@@ -18,6 +18,7 @@
     <Product>NeuroCamera</Product>
     <Company>NeuroCamera</Company>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
@@ -36,6 +37,8 @@
     <None Include="Assets\haarcascade_frontalface_default.xml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- Resource (not None) so the WPF pack URI used by Window.Icon can find it at runtime -->
+    <Resource Include="Assets\icon.ico" />
   </ItemGroup>
 
 </Project>

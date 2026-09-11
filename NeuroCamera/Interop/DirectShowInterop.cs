@@ -107,6 +107,63 @@ internal static class DirectShowInterop
         return names;
     }
 
+    /// <summary>
+    /// Returns the raw <see cref="IMoniker"/> for the Nth video input device (same order as
+    /// <see cref="EnumerateVideoInputDeviceNames"/> and the same order OpenCvSharp's DSHOW
+    /// backend assigns device indices). The caller owns the returned moniker and must
+    /// release it with <see cref="Marshal.ReleaseComObject"/> when done. Returns null if the
+    /// index is out of range or no device enumerator is available.
+    /// </summary>
+    public static IMoniker? GetMonikerForDeviceIndex(int deviceIndex)
+    {
+        object? comEnumInstance = null;
+        IEnumMoniker? monikerEnum = null;
+
+        try
+        {
+            comEnumInstance = new SystemDeviceEnum();
+            var createDevEnum = (ICreateDevEnum)comEnumInstance;
+
+            Guid category = CLSID_VideoInputDeviceCategory;
+            int hr = createDevEnum.CreateClassEnumerator(ref category, out monikerEnum, 0);
+            if (hr != 0 || monikerEnum is null)
+            {
+                return null;
+            }
+
+            var monikers = new IMoniker[1];
+            int index = 0;
+            while (monikerEnum.Next(1, monikers, IntPtr.Zero) == 0)
+            {
+                if (index == deviceIndex)
+                {
+                    return monikers[0]; // ownership transferred to the caller
+                }
+
+                Marshal.ReleaseComObject(monikers[0]);
+                index++;
+            }
+
+            return null;
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (monikerEnum is not null)
+            {
+                Marshal.ReleaseComObject(monikerEnum);
+            }
+
+            if (comEnumInstance is not null)
+            {
+                Marshal.ReleaseComObject(comEnumInstance);
+            }
+        }
+    }
+
     private static string TryReadFriendlyName(IMoniker moniker, string fallback)
     {
         try

@@ -30,7 +30,7 @@ public sealed class CalibrationEngine
     private const double Phase2EndSeconds = 10.0;
     private const double Phase3EndSeconds = 15.0;
 
-    private const double TargetFaceLuminance = 132.0;
+    private const double TargetFaceLuminance = 152.0;
     private const double TargetFaceContrastStdDev = 55.0;
     private const double DefaultBilateralSigma = 35.0;
 
@@ -244,8 +244,8 @@ public sealed class CalibrationEngine
         double currentStdDev = _faceStdDevSamples.Count > 0 ? _faceStdDevSamples.Average() : 45.0;
 
         double gamma = ImageProcessor.SolveGammaForTargetLuminance(currentLuminance, TargetFaceLuminance);
-        double alpha = Math.Clamp(TargetFaceContrastStdDev / Math.Max(currentStdDev, 1.0), 0.85, 1.45);
-        double beta = Math.Clamp(TargetFaceLuminance - (currentLuminance * alpha), -45.0, 45.0);
+        double alpha = Math.Clamp(TargetFaceContrastStdDev / Math.Max(currentStdDev, 1.0), 0.85, 1.7);
+        double beta = Math.Clamp(TargetFaceLuminance - (currentLuminance * alpha), -45.0, 70.0);
 
         double avgNoise = _noiseSamples.Count > 0 ? _noiseSamples.Average() : DefaultBilateralSigma;
         int bilateralDiameter = (int)Math.Clamp(Math.Round(5 + (avgNoise / 8.0)), 5, 9);
