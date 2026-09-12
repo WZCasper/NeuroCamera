@@ -66,4 +66,22 @@ public sealed class CameraControlSliderViewModel : ObservableObject
             _controller.Set(_setting, _value, auto: value);
         }
     }
+
+    /// <summary>
+    /// Restores this property to how the driver reports its factory-default state: if the
+    /// property supports automatic control (most cameras default exposure/white-balance to
+    /// auto), switches it back to Auto; otherwise sets it to the driver-reported default
+    /// numeric value.
+    /// </summary>
+    public void ResetToDefault()
+    {
+        if (SupportsAuto)
+        {
+            IsAuto = true;
+        }
+        else
+        {
+            Value = DefaultValue;
+        }
+    }
 }

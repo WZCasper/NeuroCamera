@@ -72,6 +72,16 @@
                               DisplayMemberPath="Name"
                               Height="42"/>
 
+                    <TextBlock Text="РАЗРЕШЕНИЕ" FontSize="11" FontWeight="Bold"
+                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,14,0,8"/>
+                    <ComboBox ItemsSource="{Binding Resolutions}"
+                              SelectedItem="{Binding SelectedResolution}"
+                              Height="42"/>
+                    <TextBlock Text="{Binding ResolutionStatusText}"
+                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
+                               TextWrapping="Wrap" Margin="0,6,0,0"
+                               Visibility="{Binding ResolutionStatusText, Converter={StaticResource StringToVisibilityConverter}}"/>
+
                     <Button Content="{Binding StreamButtonText}"
                             Command="{Binding ToggleStreamCommand}"
                             Style="{StaticResource SecondaryButton}"
@@ -112,6 +122,30 @@
                                    Foreground="{StaticResource BrushTextDisabled}" TextWrapping="Wrap"/>
                     </Grid>
 
+                    <Border Background="{StaticResource BrushPanelAlt}" CornerRadius="10" Padding="10" Margin="0,14,0,0"
+                            Visibility="{Binding DarkSceneHintVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBlock Text="Сцена тёмная: программной коррекции не хватает света. Сначала поднимите Gain/Exposure в разделе «Ручные настройки камеры» ниже, затем повторите автонастройку."
+                                   Foreground="{StaticResource BrushCyan}" FontSize="11" TextWrapping="Wrap"/>
+                    </Border>
+
+                    <TextBlock Text="БЫСТРАЯ ЯРКОСТЬ" FontSize="11" FontWeight="Bold"
+                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,18,0,8"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Slider Grid.Column="0" Minimum="-60" Maximum="60"
+                                Value="{Binding ManualBrightnessOffset, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding ManualBrightnessOffset, StringFormat={}{0:+0;-0;0}}"
+                                   Foreground="{StaticResource BrushTextSecondary}" FontSize="12"
+                                   Margin="10,0,0,0" VerticalAlignment="Center" MinWidth="28"/>
+                    </Grid>
+                    <TextBlock Text="Мгновенная подстройка сверх автонастройки — без повторных 15 секунд."
+                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
+                               TextWrapping="Wrap" Margin="0,6,0,0"/>
+
                     <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
 
                     <!-- Virtual camera status -->
@@ -139,11 +173,21 @@
                     <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
 
                     <!-- Manual hardware camera controls -->
-                    <TextBlock Text="РУЧНЫЕ НАСТРОЙКИ КАМЕРЫ" FontSize="11" FontWeight="Bold"
-                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,0,0,8"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="РУЧНЫЕ НАСТРОЙКИ КАМЕРЫ" FontSize="11" FontWeight="Bold"
+                                   Foreground="{StaticResource BrushTextSecondary}" VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" Content="Сброс к заводским"
+                                Command="{Binding ResetCameraControlsCommand}"
+                                FontSize="10" Padding="10,6"
+                                Style="{StaticResource SecondaryButton}"/>
+                    </Grid>
                     <TextBlock Text="Значения приходят прямо от драйвера камеры — ровно те же цифры покажет OBS в свойствах видео."
                                Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
-                               TextWrapping="Wrap" Margin="0,0,0,12"/>
+                               TextWrapping="Wrap" Margin="0,8,0,12"/>
 
                     <ItemsControl ItemsSource="{Binding CameraControls}">
                         <ItemsControl.ItemTemplate>

@@ -31,36 +31,75 @@ public sealed class ImageProcessor : IDisposable
     /// Detects faces in a BGR frame and returns the largest one (assumed to be the primary
     /// subject), or null if no face is currently visible.
     /// </summary>
+    /// <summary>
+    /// Faces are detected on a frame downscaled to at most this many pixels on the longest
+    /// side. Haar cascade cost scales roughly with pixel count, so running detection on a
+    /// full 4K (3840x2160) frame would be far too slow for real-time use; detection accuracy
+    /// does not meaningfully suffer from working on a ~640px version, since a face still
+    /// occupies plenty of pixels at that size.
+    /// </summary>
+    private const int FaceDetectionMaxDimension = 640;
+
     public Rect? DetectLargestFace(Mat bgrFrame)
     {
-        using Mat gray = new();
-        Cv2.CvtColor(bgrFrame, gray, ColorConversionCodes.BGR2GRAY);
-        Cv2.EqualizeHist(gray, gray);
+        int longestSide = Math.Max(bgrFrame.Width, bgrFrame.Height);
+        double scale = longestSide > FaceDetectionMaxDimension ? (double)FaceDetectionMaxDimension / longestSide : 1.0;
 
-        Size minSize = new(Math.Max(24, gray.Width / 8), Math.Max(24, gray.Height / 8));
+        Mat detectionSource = bgrFrame;
+        Mat? downscaled = null;
 
-        Rect[] faces = _faceCascade.DetectMultiScale(
-            gray,
-            scaleFactor: 1.1,
-            minNeighbors: 5,
-            flags: HaarDetectionTypes.ScaleImage,
-            minSize: minSize);
-
-        if (faces.Length == 0)
+        try
         {
-            return null;
-        }
-
-        Rect largest = faces[0];
-        foreach (Rect face in faces)
-        {
-            if (face.Width * face.Height > largest.Width * largest.Height)
+            if (scale < 1.0)
             {
-                largest = face;
+                downscaled = new Mat();
+                Cv2.Resize(bgrFrame, downscaled, new Size(0, 0), scale, scale, InterpolationFlags.Area);
+                detectionSource = downscaled;
             }
-        }
 
-        return largest;
+            using Mat gray = new();
+            Cv2.CvtColor(detectionSource, gray, ColorConversionCodes.BGR2GRAY);
+            Cv2.EqualizeHist(gray, gray);
+
+            Size minSize = new(Math.Max(24, gray.Width / 8), Math.Max(24, gray.Height / 8));
+
+            Rect[] faces = _faceCascade.DetectMultiScale(
+                gray,
+                scaleFactor: 1.1,
+                minNeighbors: 5,
+                flags: HaarDetectionTypes.ScaleImage,
+                minSize: minSize);
+
+            if (faces.Length == 0)
+            {
+                return null;
+            }
+
+            Rect largest = faces[0];
+            foreach (Rect face in faces)
+            {
+                if (face.Width * face.Height > largest.Width * largest.Height)
+                {
+                    largest = face;
+                }
+            }
+
+            if (scale < 1.0)
+            {
+                double inverseScale = 1.0 / scale;
+                largest = new Rect(
+                    (int)Math.Round(largest.X * inverseScale),
+                    (int)Math.Round(largest.Y * inverseScale),
+                    (int)Math.Round(largest.Width * inverseScale),
+                    (int)Math.Round(largest.Height * inverseScale));
+            }
+
+            return ClampRect(largest, bgrFrame.Size());
+        }
+        finally
+        {
+            downscaled?.Dispose();
+        }
     }
 
     /// <summary>

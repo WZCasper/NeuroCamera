@@ -38,6 +38,13 @@ public sealed record CalibrationParameters
     /// <summary>True once a real calibration pass (not the neutral default) has completed.</summary>
     public bool IsCalibrated { get; init; }
 
+    /// <summary>
+    /// True if the measured face brightness before correction was low enough that software
+    /// correction alone is working against a genuine lack of light - the UI uses this to
+    /// suggest raising the camera's own hardware Gain/Exposure first.
+    /// </summary>
+    public bool SceneWasDark { get; init; }
+
     /// <summary>Neutral, pass-through parameter set used before the first calibration runs.</summary>
     public static CalibrationParameters Neutral { get; } = new();
 }

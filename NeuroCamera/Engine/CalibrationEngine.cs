@@ -32,6 +32,9 @@ public sealed class CalibrationEngine
 
     private const double TargetFaceLuminance = 152.0;
     private const double TargetFaceContrastStdDev = 55.0;
+
+    /// <summary>Below this measured (pre-correction) face luminance, software correction alone is fighting a genuine lack of light - see <see cref="CalibrationParameters.SceneWasDark"/>.</summary>
+    private const double DarkSceneLuminanceThreshold = 70.0;
     private const double DefaultBilateralSigma = 35.0;
 
     // How much of the raw Gray-World correction to actually apply (0 = none, 1 = full).
@@ -251,6 +254,8 @@ public sealed class CalibrationEngine
         int bilateralDiameter = (int)Math.Clamp(Math.Round(5 + (avgNoise / 8.0)), 5, 9);
         double bilateralSigma = Math.Clamp(avgNoise * 1.4, 25.0, 90.0);
 
+        bool sceneWasDark = currentLuminance < DarkSceneLuminanceThreshold;
+
         return new CalibrationParameters
         {
             AwbGainB = gainB,
@@ -262,7 +267,8 @@ public sealed class CalibrationEngine
             BilateralDiameter = bilateralDiameter,
             BilateralSigmaColor = bilateralSigma,
             BilateralSigmaSpace = bilateralSigma,
-            IsCalibrated = true
+            IsCalibrated = true,
+            SceneWasDark = sceneWasDark
         };
     }
 

@@ -23,6 +23,11 @@ public sealed class VideoEngine : IDisposable
     private CancellationTokenSource? _cts;
     private Thread? _workerThread;
     private volatile CalibrationParameters _currentParameters = CalibrationParameters.Neutral;
+
+    // A quick, always-available brightness nudge on top of whatever calibration produced (or
+    // on top of nothing, if calibration hasn't run yet) - see SetManualBrightnessOffset.
+    private volatile double _manualBrightnessOffset;
+
     private bool _disposed;
 
     public VideoEngine(string haarCascadePath)
@@ -57,11 +62,23 @@ public sealed class VideoEngine : IDisposable
     /// <summary>Raised on the background thread whenever the virtual camera connection state changes.</summary>
     public event EventHandler<string>? VirtualCameraStatusChanged;
 
+    /// <summary>
+    /// Raised once, right after the camera opens, with the resolution/FPS the driver actually
+    /// negotiated - which does not always match what was requested (see <see cref="Start"/>).
+    /// </summary>
+    public event EventHandler<string>? ResolutionStatusChanged;
+
     /// <summary>Raised on the background thread if capture/processing fails unrecoverably.</summary>
     public event EventHandler<Exception>? ErrorOccurred;
 
-    /// <summary>Opens the given physical camera and starts the dedicated processing thread.</summary>
-    public void Start(int deviceIndex)
+    /// <summary>
+    /// Opens the given physical camera and starts the dedicated processing thread, requesting
+    /// the given resolution. Not every camera/driver supports every resolution (4K in
+    /// particular is far from universal on webcams) - the driver silently falls back to its
+    /// closest supported mode, so the actually negotiated size is read back and reported via
+    /// <see cref="ResolutionStatusChanged"/> instead of just assuming the request succeeded.
+    /// </summary>
+    public void Start(int deviceIndex, int requestedWidth, int requestedHeight)
     {
         if (IsRunning)
         {
@@ -71,7 +88,7 @@ public sealed class VideoEngine : IDisposable
         _cts = new CancellationTokenSource();
         CancellationToken token = _cts.Token;
 
-        _workerThread = new Thread(() => RunLoop(deviceIndex, token))
+        _workerThread = new Thread(() => RunLoop(deviceIndex, requestedWidth, requestedHeight, token))
         {
             IsBackground = true,
             Name = "NeuroCamera.VideoThread",
@@ -113,7 +130,20 @@ public sealed class VideoEngine : IDisposable
 
     public void CancelCalibration() => _calibrationEngine.Cancel();
 
-    private void RunLoop(int deviceIndex, CancellationToken token)
+    /// <summary>
+    /// Restores a previously saved calibration result (e.g. from the last session) so
+    /// correction is already active without waiting for a fresh 15-second auto-tune.
+    /// </summary>
+    public void ApplySavedParameters(CalibrationParameters parameters) => _currentParameters = parameters;
+
+    /// <summary>
+    /// Sets an always-on brightness nudge (roughly -60..+60) applied on top of whatever the
+    /// calibration produced - or, if calibration hasn't run yet, applied on its own - so the
+    /// person can brighten or dim the picture instantly without rerunning the full wizard.
+    /// </summary>
+    public void SetManualBrightnessOffset(double offset) => _manualBrightnessOffset = offset;
+
+    private void RunLoop(int deviceIndex, int requestedWidth, int requestedHeight, CancellationToken token)
     {
         VideoCapture? capture = null;
 
@@ -132,9 +162,18 @@ public sealed class VideoEngine : IDisposable
                 return;
             }
 
-            capture.Set(VideoCaptureProperties.FrameWidth, 1280);
-            capture.Set(VideoCaptureProperties.FrameHeight, 720);
+            capture.Set(VideoCaptureProperties.FrameWidth, requestedWidth);
+            capture.Set(VideoCaptureProperties.FrameHeight, requestedHeight);
             capture.Set(VideoCaptureProperties.Fps, 30);
+
+            int actualWidth = (int)capture.Get(VideoCaptureProperties.FrameWidth);
+            int actualHeight = (int)capture.Get(VideoCaptureProperties.FrameHeight);
+            double actualFps = capture.Get(VideoCaptureProperties.Fps);
+
+            string resolutionMessage = (actualWidth == requestedWidth && actualHeight == requestedHeight)
+                ? $"Камера работает на {actualWidth}×{actualHeight}, {actualFps:0} к/с."
+                : $"Камера не поддерживает {requestedWidth}×{requestedHeight} — используется {actualWidth}×{actualHeight}, {actualFps:0} к/с.";
+            ResolutionStatusChanged?.Invoke(this, resolutionMessage);
 
             using Mat rawFrame = new();
             DateTime lastVirtualCamRetry = DateTime.MinValue;
@@ -153,8 +192,13 @@ public sealed class VideoEngine : IDisposable
                 }
 
                 CalibrationParameters parameters = _currentParameters;
+                double manualOffset = _manualBrightnessOffset;
 
-                using (Mat processedFrame = _imageProcessor.ProcessFrame(rawFrame, parameters))
+                CalibrationParameters effectiveParameters = manualOffset == 0
+                    ? parameters
+                    : parameters with { IsCalibrated = true, Beta = parameters.Beta + manualOffset };
+
+                using (Mat processedFrame = _imageProcessor.ProcessFrame(rawFrame, effectiveParameters))
                 {
                     BitmapSource preview = MatImageConverter.ToBitmapSource(processedFrame);
                     FrameReady?.Invoke(this, preview);
