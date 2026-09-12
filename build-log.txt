@@ -1,0 +1,4 @@
+  Determining projects to restore...
+  Restored D:\a\NeuroCamera\NeuroCamera\NeuroCamera\NeuroCamera.csproj (in 9.09 sec).
+  NeuroCamera -> D:\a\NeuroCamera\NeuroCamera\NeuroCamera\bin\Release\net8.0-windows\win-x64\NeuroCamera.dll
+  NeuroCamera -> D:\a\NeuroCamera\NeuroCamera\publish\
