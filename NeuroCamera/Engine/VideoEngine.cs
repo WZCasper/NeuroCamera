@@ -26,7 +26,7 @@ public sealed class VideoEngine : IDisposable
 
     // A quick, always-available brightness nudge on top of whatever calibration produced (or
     // on top of nothing, if calibration hasn't run yet) - see SetManualBrightnessOffset.
-    private volatile double _manualBrightnessOffset;
+    private double _manualBrightnessOffset;
 
     private bool _disposed;
 
@@ -141,7 +141,7 @@ public sealed class VideoEngine : IDisposable
     /// calibration produced - or, if calibration hasn't run yet, applied on its own - so the
     /// person can brighten or dim the picture instantly without rerunning the full wizard.
     /// </summary>
-    public void SetManualBrightnessOffset(double offset) => _manualBrightnessOffset = offset;
+    public void SetManualBrightnessOffset(double offset) => Volatile.Write(ref _manualBrightnessOffset, offset);
 
     private void RunLoop(int deviceIndex, int requestedWidth, int requestedHeight, CancellationToken token)
     {
@@ -192,7 +192,7 @@ public sealed class VideoEngine : IDisposable
                 }
 
                 CalibrationParameters parameters = _currentParameters;
-                double manualOffset = _manualBrightnessOffset;
+                double manualOffset = Volatile.Read(ref _manualBrightnessOffset);
 
                 CalibrationParameters effectiveParameters = manualOffset == 0
                     ? parameters
