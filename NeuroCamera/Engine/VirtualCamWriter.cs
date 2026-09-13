@@ -39,7 +39,7 @@ public sealed class VirtualCamWriter : IDisposable
 
     // SharedImageMemory::EFormat / EResizeMode / EMirrorMode from UnityCapture's shared.inl
     private const int FORMAT_UINT8 = 0;
-    private const int RESIZEMODE_DISABLED = 0;
+    private const int RESIZEMODE_LINEAR = 1;
     private const int MIRRORMODE_DISABLED = 0;
 
     // Header layout (must match SharedMemHeader in shared.inl exactly, all 32-bit fields):
@@ -86,6 +86,20 @@ public sealed class VirtualCamWriter : IDisposable
     public bool IsConnected { get; private set; }
 
     /// <summary>
+    /// Number of frames successfully written since this writer last connected. Exposed so the
+    /// UI can show real evidence of whether frames are actually flowing, rather than the
+    /// person having to guess from a blank/placeholder image on the receiving end.
+    /// </summary>
+    public long FramesSent { get; private set; }
+
+    /// <summary>
+    /// Short machine-readable reason the most recent connect/send attempt failed (e.g.
+    /// "NoReceiver", "MutexWaitFailed", "FrameTooLarge"), or null if the last attempt
+    /// succeeded. Cleared on a successful connect.
+    /// </summary>
+    public string? LastFailureReason { get; private set; }
+
+    /// <summary>
     /// Attempts to attach to an already-running virtual camera receiver. Safe to call
     /// repeatedly (e.g. every couple of seconds from the video loop) until it succeeds -
     /// it will keep failing harmlessly until some application opens the virtual camera.
@@ -108,6 +122,7 @@ public sealed class VirtualCamWriter : IDisposable
                     _mutex = OpenMutexA(SYNCHRONIZE, false, "UnityCapture_Mutx" + suffix);
                     if (_mutex == IntPtr.Zero)
                     {
+                        LastFailureReason = "NoReceiver (мьютекс не найден - откройте виртуальную камеру в OBS/Zoom/Teams хотя бы один раз)";
                         return false;
                     }
                 }
@@ -117,6 +132,7 @@ public sealed class VirtualCamWriter : IDisposable
                     _wantFrameEvent = CreateEventA(IntPtr.Zero, false, false, "UnityCapture_Want" + suffix);
                     if (_wantFrameEvent == IntPtr.Zero)
                     {
+                        LastFailureReason = "CreateWantEventFailed";
                         ReleasePartialHandles();
                         return false;
                     }
@@ -127,6 +143,7 @@ public sealed class VirtualCamWriter : IDisposable
                     _sentFrameEvent = OpenEventA(EVENT_MODIFY_STATE, false, "UnityCapture_Sent" + suffix);
                     if (_sentFrameEvent == IntPtr.Zero)
                     {
+                        LastFailureReason = "OpenSentEventFailed";
                         ReleasePartialHandles();
                         return false;
                     }
@@ -137,6 +154,7 @@ public sealed class VirtualCamWriter : IDisposable
                     _sharedFile = OpenFileMappingA(FILE_MAP_WRITE, false, "UnityCapture_Data" + suffix);
                     if (_sharedFile == IntPtr.Zero)
                     {
+                        LastFailureReason = "OpenFileMappingFailed";
                         ReleasePartialHandles();
                         return false;
                     }
@@ -147,6 +165,7 @@ public sealed class VirtualCamWriter : IDisposable
                     _mappedView = MapViewOfFile(_sharedFile, FILE_MAP_WRITE, 0, 0, UIntPtr.Zero);
                     if (_mappedView == IntPtr.Zero)
                     {
+                        LastFailureReason = "MapViewOfFileFailed";
                         ReleasePartialHandles();
                         return false;
                     }
@@ -155,10 +174,13 @@ public sealed class VirtualCamWriter : IDisposable
                 }
 
                 IsConnected = true;
+                FramesSent = 0;
+                LastFailureReason = null;
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                LastFailureReason = $"ConnectException: {ex.Message}";
                 ReleasePartialHandles();
                 return false;
             }
@@ -190,6 +212,7 @@ public sealed class VirtualCamWriter : IDisposable
         // check `if (m_pSharedBuf->maxSize < DataSize) return SENDRES_TOOLARGE;`.
         if (dataSize > _mappedMaxSize)
         {
+            LastFailureReason = $"FrameTooLarge ({width}x{height} > лимит драйвера)";
             return false;
         }
 
@@ -198,6 +221,7 @@ public sealed class VirtualCamWriter : IDisposable
             uint waitResult = WaitForSingleObject(_mutex, INFINITE);
             if (waitResult != WAIT_OBJECT_0)
             {
+                LastFailureReason = "MutexWaitFailed";
                 Disconnect();
                 return false;
             }
@@ -208,7 +232,7 @@ public sealed class VirtualCamWriter : IDisposable
                 Marshal.WriteInt32(_mappedView, HeaderHeightOffset, height);
                 Marshal.WriteInt32(_mappedView, HeaderStrideOffset, stride);
                 Marshal.WriteInt32(_mappedView, HeaderFormatOffset, FORMAT_UINT8);
-                Marshal.WriteInt32(_mappedView, HeaderResizeModeOffset, RESIZEMODE_DISABLED);
+                Marshal.WriteInt32(_mappedView, HeaderResizeModeOffset, RESIZEMODE_LINEAR);
                 Marshal.WriteInt32(_mappedView, HeaderMirrorModeOffset, MIRRORMODE_DISABLED);
                 Marshal.WriteInt32(_mappedView, HeaderTimeoutOffset, 1000);
                 Marshal.Copy(rgbaPixels, 0, IntPtr.Add(_mappedView, HeaderDataOffset), (int)dataSize);
@@ -219,6 +243,8 @@ public sealed class VirtualCamWriter : IDisposable
             }
 
             SetEvent(_sentFrameEvent);
+            FramesSent++;
+            LastFailureReason = null;
 
             // If the "want frame" event is not currently signalled, the consumer did not
             // ask for a fresh frame since the last send - i.e. we are producing faster
@@ -228,8 +254,9 @@ public sealed class VirtualCamWriter : IDisposable
 
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            LastFailureReason = $"SendException: {ex.Message}";
             Disconnect();
             return false;
         }

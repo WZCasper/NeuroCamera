@@ -16,4 +16,12 @@ public sealed class AppSettings
     public int ResolutionHeight { get; set; } = CaptureResolutions.Default.Height;
 
     public CalibrationParameters? LastCalibration { get; set; }
+
+    public string ObsHost { get; set; } = "localhost";
+
+    public int ObsPort { get; set; } = 4455;
+
+    public string ObsSourceName { get; set; } = "";
+
+    public string ObsFilterName { get; set; } = "NeuroCamera Коррекция цвета";
 }

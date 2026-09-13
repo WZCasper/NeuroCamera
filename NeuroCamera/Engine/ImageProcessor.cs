@@ -252,7 +252,7 @@ public sealed class ImageProcessor : IDisposable
         double targetNorm = Math.Clamp(targetLuminance / 255.0, 0.02, 0.98);
 
         double gamma = Math.Log(currentNorm) / Math.Log(targetNorm);
-        return Math.Clamp(gamma, 0.6, 2.2);
+        return Math.Clamp(gamma, 0.65, 1.9);
     }
 
     /// <summary>Applies gamma correction via a precomputed 256-entry lookup table.</summary>

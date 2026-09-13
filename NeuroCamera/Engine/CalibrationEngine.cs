@@ -30,7 +30,7 @@ public sealed class CalibrationEngine
     private const double Phase2EndSeconds = 10.0;
     private const double Phase3EndSeconds = 15.0;
 
-    private const double TargetFaceLuminance = 152.0;
+    private const double TargetFaceLuminance = 140.0;
     private const double TargetFaceContrastStdDev = 55.0;
 
     /// <summary>Below this measured (pre-correction) face luminance, software correction alone is fighting a genuine lack of light - see <see cref="CalibrationParameters.SceneWasDark"/>.</summary>
@@ -246,9 +246,16 @@ public sealed class CalibrationEngine
         double currentLuminance = _faceLuminanceSamples.Count > 0 ? _faceLuminanceSamples.Average() : fallbackLuminance;
         double currentStdDev = _faceStdDevSamples.Count > 0 ? _faceStdDevSamples.Average() : 45.0;
 
+        // Gamma alone brings the mean toward the target (solved below). Alpha then stretches
+        // contrast *around* that already-correct mean - beta must only compensate for that
+        // stretch (targetLuminance*(1-alpha)), not independently re-target brightness from the
+        // raw pre-gamma measurement. Computing beta from raw currentLuminance (as an earlier
+        // version did) double-corrects: gamma already closes the gap, so a second independent
+        // brightness correction on top overshoots past the target - this is what caused
+        // reported overexposure. Every stage still only nudges toward the target, never away.
         double gamma = ImageProcessor.SolveGammaForTargetLuminance(currentLuminance, TargetFaceLuminance);
-        double alpha = Math.Clamp(TargetFaceContrastStdDev / Math.Max(currentStdDev, 1.0), 0.85, 1.7);
-        double beta = Math.Clamp(TargetFaceLuminance - (currentLuminance * alpha), -45.0, 70.0);
+        double alpha = Math.Clamp(TargetFaceContrastStdDev / Math.Max(currentStdDev, 1.0), 0.85, 1.35);
+        double beta = Math.Clamp(TargetFaceLuminance * (1.0 - alpha), -80.0, 80.0);
 
         double avgNoise = _noiseSamples.Count > 0 ? _noiseSamples.Average() : DefaultBilateralSigma;
         int bilateralDiameter = (int)Math.Clamp(Math.Round(5 + (avgNoise / 8.0)), 5, 9);

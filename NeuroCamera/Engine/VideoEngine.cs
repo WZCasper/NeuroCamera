@@ -176,7 +176,7 @@ public sealed class VideoEngine : IDisposable
             ResolutionStatusChanged?.Invoke(this, resolutionMessage);
 
             using Mat rawFrame = new();
-            DateTime lastVirtualCamRetry = DateTime.MinValue;
+            DateTime lastVirtualCamStatusUpdate = DateTime.MinValue;
 
             while (!token.IsCancellationRequested)
             {
@@ -203,7 +203,7 @@ public sealed class VideoEngine : IDisposable
                     BitmapSource preview = MatImageConverter.ToBitmapSource(processedFrame);
                     FrameReady?.Invoke(this, preview);
 
-                    PumpVirtualCamera(processedFrame, ref lastVirtualCamRetry);
+                    PumpVirtualCamera(processedFrame, ref lastVirtualCamStatusUpdate);
                 }
             }
         }
@@ -221,20 +221,23 @@ public sealed class VideoEngine : IDisposable
         }
     }
 
-    private void PumpVirtualCamera(Mat processedFrame, ref DateTime lastRetry)
+    private static readonly TimeSpan VirtualCamHeartbeatInterval = TimeSpan.FromSeconds(3);
+
+    private void PumpVirtualCamera(Mat processedFrame, ref DateTime lastStatusUpdate)
     {
         if (!_virtualCamWriter.IsConnected)
         {
-            if (DateTime.UtcNow - lastRetry < VirtualCamRetryInterval)
+            if (DateTime.UtcNow - lastStatusUpdate < VirtualCamRetryInterval)
             {
                 return;
             }
 
-            lastRetry = DateTime.UtcNow;
+            lastStatusUpdate = DateTime.UtcNow;
             bool connected = _virtualCamWriter.TryConnect();
             VirtualCameraStatusChanged?.Invoke(this, connected
                 ? "Виртуальная камера подключена."
-                : "Виртуальная камера не найдена. Откройте \"Unity Video Capture\" в Zoom/Teams/OBS, чтобы подключить.");
+                : "Виртуальная камера не найдена: " + (_virtualCamWriter.LastFailureReason
+                    ?? "откройте \"Unity Video Capture\" в Zoom/Teams/OBS, чтобы подключить."));
 
             if (!connected)
             {
@@ -245,7 +248,17 @@ public sealed class VideoEngine : IDisposable
         byte[] rgbaBytes = MatImageConverter.ToRgbaBytes(processedFrame, out int width, out int height);
         if (!_virtualCamWriter.SendFrame(rgbaBytes, width, height))
         {
-            VirtualCameraStatusChanged?.Invoke(this, "Соединение с виртуальной камерой потеряно, переподключаюсь...");
+            VirtualCameraStatusChanged?.Invoke(this, "Соединение с виртуальной камерой потеряно ("
+                + (_virtualCamWriter.LastFailureReason ?? "неизвестная причина") + "), переподключаюсь...");
+            return;
+        }
+
+        // Periodic heartbeat so the UI shows live proof frames are actually flowing (rather
+        // than the person having to infer it indirectly from what the receiving app shows).
+        if (DateTime.UtcNow - lastStatusUpdate >= VirtualCamHeartbeatInterval)
+        {
+            lastStatusUpdate = DateTime.UtcNow;
+            VirtualCameraStatusChanged?.Invoke(this, $"Виртуальная камера подключена. Отправлено кадров: {_virtualCamWriter.FramesSent}.");
         }
     }
 

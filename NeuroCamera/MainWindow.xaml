@@ -172,6 +172,62 @@
 
                     <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
 
+                    <!-- OBS equivalent values + apply -->
+                    <TextBlock Text="ЭКВИВАЛЕНТ ДЛЯ OBS" FontSize="11" FontWeight="Bold"
+                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,0,0,8"/>
+                    <TextBlock Text="Те же значения, что и в фильтре OBS «Коррекция цвета» — можно перенести вручную или нажать «Применить в OBS»."
+                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
+                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <Border Background="{StaticResource BrushPanelAlt}" CornerRadius="10" Padding="12">
+                        <TextBlock Text="{Binding ObsEquivalentText}" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource BrushTextPrimary}"/>
+                    </Border>
+
+                    <TextBlock Text="Имя источника камеры в OBS" FontSize="10"
+                               Foreground="{StaticResource BrushTextDisabled}" Margin="0,12,0,4"/>
+                    <TextBox Text="{Binding ObsSourceName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <TextBlock Text="Имя фильтра «Коррекция цвета»" FontSize="10"
+                               Foreground="{StaticResource BrushTextDisabled}" Margin="0,10,0,4"/>
+                    <TextBox Text="{Binding ObsFilterName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="10"/>
+                            <ColumnDefinition Width="90"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Хост WebSocket" FontSize="10"
+                                       Foreground="{StaticResource BrushTextDisabled}" Margin="0,0,0,4"/>
+                            <TextBox Text="{Binding ObsHost, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Порт" FontSize="10"
+                                       Foreground="{StaticResource BrushTextDisabled}" Margin="0,0,0,4"/>
+                            <TextBox Text="{Binding ObsPort, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <TextBlock Text="Пароль WebSocket-сервера (если задан в OBS)" FontSize="10"
+                               Foreground="{StaticResource BrushTextDisabled}" Margin="0,10,0,4"/>
+                    <PasswordBox x:Name="ObsPasswordBox" PasswordChanged="ObsPasswordBox_PasswordChanged"/>
+
+                    <Button Content="Применить в OBS"
+                            Command="{Binding ApplyToObsCommand}"
+                            Style="{StaticResource AccentButton}"
+                            Margin="0,14,0,0"
+                            HorizontalAlignment="Stretch"/>
+                    <TextBlock Text="{Binding ObsApplyStatusText}"
+                               Foreground="{StaticResource BrushCyan}" FontSize="11"
+                               TextWrapping="Wrap" Margin="0,8,0,0"
+                               Visibility="{Binding ObsApplyStatusText, Converter={StaticResource StringToVisibilityConverter}}"/>
+                    <TextBlock Text="Требуется включённый WebSocket-сервер в OBS: Инструменты → Настройки WebSocket-сервера."
+                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
+                               TextWrapping="Wrap" Margin="0,6,0,0"/>
+
+                    <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
+
                     <!-- Manual hardware camera controls -->
                     <Grid>
                         <Grid.ColumnDefinitions>

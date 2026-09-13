@@ -19,8 +19,9 @@ namespace NeuroCamera.ViewModels;
 /// from <see cref="VideoEngine"/> is marshalled onto the WPF Dispatcher before touching any
 /// bindable property, so the view model itself is safe to bind directly from XAML.
 ///
-/// Camera choice, resolution, and the last completed calibration are persisted via
-/// <see cref="SettingsStore"/> so the app comes back up already configured next time.
+/// Camera choice, resolution, OBS connection details, and the last completed calibration are
+/// persisted via <see cref="SettingsStore"/> so the app comes back up already configured next
+/// time (the OBS password is the one exception - never written to disk).
 /// </summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
@@ -29,6 +30,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly AppSettings _settings;
 
     private HardwareCameraController? _hardwareController;
+    private ObsEquivalentCalculator.ObsColorCorrectionValues? _lastObsValues;
 
     private CameraDeviceInfo? _selectedCamera;
     private CaptureResolution _selectedResolution;
@@ -43,6 +45,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _resolutionStatusText = "";
     private double _manualBrightnessOffset;
     private bool _darkSceneHintVisible;
+    private string _obsEquivalentText = "Запустите автонастройку, чтобы увидеть эквивалентные значения для OBS.";
+    private string _obsSourceName;
+    private string _obsFilterName;
+    private string _obsHost;
+    private int _obsPort;
+    private string _obsApplyStatusText = "";
+    private bool _isApplyingToObs;
     private string? _errorText;
     private bool _disposed;
 
@@ -51,6 +60,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _dispatcher = Application.Current.Dispatcher;
         _settings = SettingsStore.Load();
         _selectedResolution = CaptureResolutions.FindOrDefault(_settings.ResolutionWidth, _settings.ResolutionHeight);
+        _obsHost = _settings.ObsHost;
+        _obsPort = _settings.ObsPort;
+        _obsSourceName = _settings.ObsSourceName;
+        _obsFilterName = _settings.ObsFilterName;
 
         string cascadePath = Path.Combine(AppContext.BaseDirectory, "Assets", "haarcascade_frontalface_default.xml");
         _videoEngine = new VideoEngine(cascadePath);
@@ -67,12 +80,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             CalibrationStatusText = "Загружены параметры с прошлого запуска. Можно откалибровать заново в любой момент.";
             CalibrationProgress = 100;
             DarkSceneHintVisible = savedCalibration.SceneWasDark;
+            RecomputeObsEquivalent(savedCalibration);
         }
 
         ToggleStreamCommand = new RelayCommand(ToggleStream, () => SelectedCamera is not null);
         AutoTuneCommand = new RelayCommand(RunAutoTune, () => IsStreaming && !IsCalibrating);
         InstallVirtualCameraCommand = new RelayCommand(() => _ = InstallVirtualCameraAsync(), () => !IsInstallingVirtualCamera);
         ResetCameraControlsCommand = new RelayCommand(ResetCameraControls, () => CameraControls.Count > 0);
+        ApplyToObsCommand = new RelayCommand(() => _ = ApplyToObsAsync(), () => !IsApplyingToObs && _lastObsValues is not null);
 
         RefreshCameras();
     }
@@ -178,6 +193,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _calibrationStatusText, value);
     }
 
+    /// <summary>
+    /// Live status of the virtual-camera connection, including a running frames-sent count
+    /// once connected and the specific failure reason when it isn't - so a problem is
+    /// something the person can read directly, not something they have to guess at from what
+    /// OBS shows.
+    /// </summary>
     public string VirtualCameraStatusText
     {
         get => _virtualCameraStatusText;
@@ -225,6 +246,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
 
             _videoEngine.SetManualBrightnessOffset(value);
+            RecomputeObsEquivalent(_videoEngine.CurrentParameters);
         }
     }
 
@@ -233,6 +255,68 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         get => _darkSceneHintVisible;
         private set => SetProperty(ref _darkSceneHintVisible, value);
+    }
+
+    /// <summary>
+    /// NeuroCamera's current gamma/contrast/brightness correction expressed as the equivalent
+    /// values for OBS's own "Color Correction" filter (see <see cref="ObsEquivalentCalculator"/>),
+    /// so the same look can be reproduced by hand in OBS's filter sliders if preferred.
+    /// </summary>
+    public string ObsEquivalentText
+    {
+        get => _obsEquivalentText;
+        private set => SetProperty(ref _obsEquivalentText, value);
+    }
+
+    /// <summary>Exact source name as it appears in OBS's Sources list - required to target the right filter.</summary>
+    public string ObsSourceName
+    {
+        get => _obsSourceName;
+        set => SetProperty(ref _obsSourceName, value);
+    }
+
+    /// <summary>Name of the Color Correction filter to create/update on that source.</summary>
+    public string ObsFilterName
+    {
+        get => _obsFilterName;
+        set => SetProperty(ref _obsFilterName, value);
+    }
+
+    public string ObsHost
+    {
+        get => _obsHost;
+        set => SetProperty(ref _obsHost, value);
+    }
+
+    public int ObsPort
+    {
+        get => _obsPort;
+        set => SetProperty(ref _obsPort, value);
+    }
+
+    /// <summary>
+    /// OBS WebSocket server password, set from the UI's PasswordBox via code-behind (WPF does
+    /// not allow binding PasswordBox.Password directly, for security reasons). Deliberately
+    /// never persisted to <see cref="AppSettings"/>.
+    /// </summary>
+    public string ObsPassword { get; set; } = "";
+
+    public string ObsApplyStatusText
+    {
+        get => _obsApplyStatusText;
+        private set => SetProperty(ref _obsApplyStatusText, value);
+    }
+
+    public bool IsApplyingToObs
+    {
+        get => _isApplyingToObs;
+        private set
+        {
+            if (SetProperty(ref _isApplyingToObs, value))
+            {
+                RelayCommand.RaiseCanExecuteChanged();
+            }
+        }
     }
 
     public string? ErrorText
@@ -247,6 +331,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand AutoTuneCommand { get; }
     public RelayCommand InstallVirtualCameraCommand { get; }
     public RelayCommand ResetCameraControlsCommand { get; }
+    public RelayCommand ApplyToObsCommand { get; }
 
     private void RefreshCameras()
     {
@@ -278,6 +363,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IsCalibrating = false;
             PreviewFrame = null;
             ResolutionStatusText = "";
+            VirtualCameraStatusText = "Виртуальная камера не подключена.";
             ClearHardwareControls();
             return;
         }
@@ -356,6 +442,66 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IsInstallingVirtualCamera = false;
     }
 
+    private void RecomputeObsEquivalent(CalibrationParameters baseParameters)
+    {
+        if (!baseParameters.IsCalibrated && ManualBrightnessOffset == 0)
+        {
+            _lastObsValues = null;
+            ObsEquivalentText = "Запустите автонастройку, чтобы увидеть эквивалентные значения для OBS.";
+            RelayCommand.RaiseCanExecuteChanged();
+            return;
+        }
+
+        CalibrationParameters effective = baseParameters with
+        {
+            IsCalibrated = true,
+            Beta = baseParameters.Beta + ManualBrightnessOffset
+        };
+
+        ObsEquivalentCalculator.ObsColorCorrectionValues values = ObsEquivalentCalculator.FromCalibration(effective);
+        _lastObsValues = values;
+
+        ObsEquivalentText =
+            $"Гамма: {values.Gamma:+0.00;-0.00;0.00}   " +
+            $"Контрастность: {values.Contrast:+0.00;-0.00;0.00}   " +
+            $"Яркость: {values.Brightness:+0.0000;-0.0000;0.0000}\n" +
+            "Насыщенность и сдвиг оттенка NeuroCamera не меняет — оставьте 0 в OBS.";
+
+        RelayCommand.RaiseCanExecuteChanged();
+    }
+
+    private async Task ApplyToObsAsync()
+    {
+        if (_lastObsValues is not { } values)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(ObsSourceName))
+        {
+            ObsApplyStatusText = "Укажите точное имя источника камеры так, как оно называется в списке источников OBS.";
+            return;
+        }
+
+        IsApplyingToObs = true;
+        ObsApplyStatusText = "Подключаюсь к OBS...";
+
+        (bool success, string message) = await ObsWebSocketClient.ApplyColorCorrectionAsync(
+            ObsHost, ObsPort, ObsPassword, ObsSourceName, ObsFilterName, values);
+
+        ObsApplyStatusText = message;
+        IsApplyingToObs = false;
+
+        if (success)
+        {
+            _settings.ObsHost = ObsHost;
+            _settings.ObsPort = ObsPort;
+            _settings.ObsSourceName = ObsSourceName;
+            _settings.ObsFilterName = ObsFilterName;
+            PersistSettings();
+        }
+    }
+
     private void PersistSettings() => SettingsStore.Save(_settings);
 
     private void OnFrameReady(object? sender, BitmapSource frame) =>
@@ -378,6 +524,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             CalibrationProgress = 100;
             CalibrationStatusText = "Автонастройка завершена — параметры применены к видеопотоку.";
             DarkSceneHintVisible = parameters.SceneWasDark;
+            RecomputeObsEquivalent(parameters);
 
             _settings.LastCalibration = parameters;
             PersistSettings();
