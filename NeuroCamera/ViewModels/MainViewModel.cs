@@ -45,13 +45,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _resolutionStatusText = "";
     private double _manualBrightnessOffset;
     private bool _darkSceneHintVisible;
-    private string _obsEquivalentText = "Запустите автонастройку, чтобы увидеть эквивалентные значения для OBS.";
     private string _obsSourceName;
     private string _obsFilterName;
     private string _obsHost;
     private int _obsPort;
-    private string _obsApplyStatusText = "";
-    private bool _isApplyingToObs;
+    private string _obsStatusText = "";
+    private bool _isObsBusy;
     private string? _errorText;
     private bool _disposed;
 
@@ -87,7 +86,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         AutoTuneCommand = new RelayCommand(RunAutoTune, () => IsStreaming && !IsCalibrating);
         InstallVirtualCameraCommand = new RelayCommand(() => _ = InstallVirtualCameraAsync(), () => !IsInstallingVirtualCamera);
         ResetCameraControlsCommand = new RelayCommand(ResetCameraControls, () => CameraControls.Count > 0);
-        ApplyToObsCommand = new RelayCommand(() => _ = ApplyToObsAsync(), () => !IsApplyingToObs && _lastObsValues is not null);
+        TestObsConnectionCommand = new RelayCommand(() => _ = TestObsConnectionAsync(), () => !IsObsBusy);
+        ApplyToObsCommand = new RelayCommand(() => _ = ApplyToObsAsync(), () => !IsObsBusy && _lastObsValues is not null);
 
         RefreshCameras();
     }
@@ -99,6 +99,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>Live hardware camera property sliders (brightness, exposure, white balance, etc.) for the currently streaming device.</summary>
     public ObservableCollection<CameraControlSliderViewModel> CameraControls { get; } = new();
+
+    /// <summary>
+    /// NeuroCamera's current correction expressed as OBS Color Correction filter values, one
+    /// row per parameter with its own copy-to-clipboard button (see
+    /// <see cref="ObsEquivalentCalculator"/>). Empty until the first calibration completes.
+    /// </summary>
+    public ObservableCollection<ObsValueRowViewModel> ObsValueRows { get; } = new();
 
     public CameraDeviceInfo? SelectedCamera
     {
@@ -257,17 +264,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _darkSceneHintVisible, value);
     }
 
-    /// <summary>
-    /// NeuroCamera's current gamma/contrast/brightness correction expressed as the equivalent
-    /// values for OBS's own "Color Correction" filter (see <see cref="ObsEquivalentCalculator"/>),
-    /// so the same look can be reproduced by hand in OBS's filter sliders if preferred.
-    /// </summary>
-    public string ObsEquivalentText
-    {
-        get => _obsEquivalentText;
-        private set => SetProperty(ref _obsEquivalentText, value);
-    }
-
     /// <summary>Exact source name as it appears in OBS's Sources list - required to target the right filter.</summary>
     public string ObsSourceName
     {
@@ -282,6 +278,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         set => SetProperty(ref _obsFilterName, value);
     }
 
+    /// <summary>IP/host of the OBS WebSocket server - shown in OBS under Инструменты → Настройки WebSocket-сервера → Показать сведения о подключении as "IP сервера".</summary>
     public string ObsHost
     {
         get => _obsHost;
@@ -301,18 +298,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public string ObsPassword { get; set; } = "";
 
-    public string ObsApplyStatusText
+    /// <summary>Result of the most recent Test-connection or Apply action against OBS.</summary>
+    public string ObsStatusText
     {
-        get => _obsApplyStatusText;
-        private set => SetProperty(ref _obsApplyStatusText, value);
+        get => _obsStatusText;
+        private set => SetProperty(ref _obsStatusText, value);
     }
 
-    public bool IsApplyingToObs
+    public bool IsObsBusy
     {
-        get => _isApplyingToObs;
+        get => _isObsBusy;
         private set
         {
-            if (SetProperty(ref _isApplyingToObs, value))
+            if (SetProperty(ref _isObsBusy, value))
             {
                 RelayCommand.RaiseCanExecuteChanged();
             }
@@ -331,15 +329,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand AutoTuneCommand { get; }
     public RelayCommand InstallVirtualCameraCommand { get; }
     public RelayCommand ResetCameraControlsCommand { get; }
+    public RelayCommand TestObsConnectionCommand { get; }
     public RelayCommand ApplyToObsCommand { get; }
 
     private void RefreshCameras()
     {
         Cameras.Clear();
-        List<string> names = DirectShowInterop.EnumerateVideoInputDeviceNames();
-        for (int i = 0; i < names.Count; i++)
+        foreach (DirectShowInterop.VideoInputDevice device in DirectShowInterop.EnumerateVideoInputDevices())
         {
-            Cameras.Add(new CameraDeviceInfo(i, names[i]));
+            Cameras.Add(new CameraDeviceInfo(device.Index, device.Name));
         }
 
         CameraDeviceInfo? preferred = _settings.SelectedCameraName is { } savedName
@@ -447,7 +445,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (!baseParameters.IsCalibrated && ManualBrightnessOffset == 0)
         {
             _lastObsValues = null;
-            ObsEquivalentText = "Запустите автонастройку, чтобы увидеть эквивалентные значения для OBS.";
+            ObsValueRows.Clear();
             RelayCommand.RaiseCanExecuteChanged();
             return;
         }
@@ -461,13 +459,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ObsEquivalentCalculator.ObsColorCorrectionValues values = ObsEquivalentCalculator.FromCalibration(effective);
         _lastObsValues = values;
 
-        ObsEquivalentText =
-            $"Гамма: {values.Gamma:+0.00;-0.00;0.00}   " +
-            $"Контрастность: {values.Contrast:+0.00;-0.00;0.00}   " +
-            $"Яркость: {values.Brightness:+0.0000;-0.0000;0.0000}\n" +
-            "Насыщенность и сдвиг оттенка NeuroCamera не меняет — оставьте 0 в OBS.";
+        ObsValueRows.Clear();
+        ObsValueRows.Add(new ObsValueRowViewModel("Гамма", values.Gamma.ToString("+0.00;-0.00;0.00")));
+        ObsValueRows.Add(new ObsValueRowViewModel("Контрастность", values.Contrast.ToString("+0.00;-0.00;0.00")));
+        ObsValueRows.Add(new ObsValueRowViewModel("Яркость", values.Brightness.ToString("+0.0000;-0.0000;0.0000")));
+        ObsValueRows.Add(new ObsValueRowViewModel("Насыщенность", "0,00 (не меняется)"));
+        ObsValueRows.Add(new ObsValueRowViewModel("Сдвиг оттенка", "0,00 (не меняется)"));
 
         RelayCommand.RaiseCanExecuteChanged();
+    }
+
+    private async Task TestObsConnectionAsync()
+    {
+        IsObsBusy = true;
+        ObsStatusText = "Подключаюсь к OBS...";
+
+        (bool _, string message) = await ObsWebSocketClient.TestConnectionAsync(ObsHost, ObsPort, ObsPassword);
+
+        ObsStatusText = message;
+        IsObsBusy = false;
     }
 
     private async Task ApplyToObsAsync()
@@ -479,18 +489,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         if (string.IsNullOrWhiteSpace(ObsSourceName))
         {
-            ObsApplyStatusText = "Укажите точное имя источника камеры так, как оно называется в списке источников OBS.";
+            ObsStatusText = "Укажите точное имя источника камеры так, как оно называется в списке источников OBS.";
             return;
         }
 
-        IsApplyingToObs = true;
-        ObsApplyStatusText = "Подключаюсь к OBS...";
+        IsObsBusy = true;
+        ObsStatusText = "Подключаюсь к OBS...";
 
         (bool success, string message) = await ObsWebSocketClient.ApplyColorCorrectionAsync(
             ObsHost, ObsPort, ObsPassword, ObsSourceName, ObsFilterName, values);
 
-        ObsApplyStatusText = message;
-        IsApplyingToObs = false;
+        ObsStatusText = message;
+        IsObsBusy = false;
 
         if (success)
         {

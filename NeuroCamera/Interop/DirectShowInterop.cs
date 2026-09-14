@@ -46,14 +46,30 @@ internal static class DirectShowInterop
             [MarshalAs(UnmanagedType.Struct)] ref object value);
     }
 
+    /// <summary>One physical video input device as DirectShow enumerates it.</summary>
+    public sealed record VideoInputDevice(int Index, string Name);
+
     /// <summary>
-    /// Enumerates the friendly names of every video capture device currently registered
-    /// with the OS, in the same enumeration order DirectShow (and therefore OpenCvSharp's
-    /// DSHOW backend) will assign as device indices 0, 1, 2, ...
+    /// Enumerates real, physical video capture devices only - virtual/software-registered
+    /// ones (Unity Video Capture, OBS Virtual Camera, Snap Camera, and any other DirectShow
+    /// filter that was regsvr32'd rather than backed by actual PnP hardware) are excluded, so
+    /// NeuroCamera's own input picker never lists its own virtual output or similar noise.
+    ///
+    /// This is not a guessed name denylist: DirectShow itself encodes the distinction in each
+    /// moniker's display name - real hardware devices have a display name starting with
+    /// "@device:pnp:", while filters registered purely via COM (regsvr32, no PnP hardware
+    /// behind them) start with "@device:sw:{CLSID}". Filtering on that prefix is the same
+    /// signal DirectShow-aware software uses generally, not specific to any one virtual
+    /// camera product.
+    ///
+    /// <see cref="VideoInputDevice.Index"/> is the device's true position in DirectShow's own
+    /// enumeration order (i.e. what OpenCvSharp's DSHOW backend expects as a device index) -
+    /// it is preserved even though filtered-out devices leave gaps, since VideoCapture must be
+    /// opened with the *real* index, not a position within this filtered list.
     /// </summary>
-    public static List<string> EnumerateVideoInputDeviceNames()
+    public static List<VideoInputDevice> EnumerateVideoInputDevices()
     {
-        var names = new List<string>();
+        var devices = new List<VideoInputDevice>();
 
         object? comEnumInstance = null;
         IEnumMoniker? monikerEnum = null;
@@ -69,20 +85,26 @@ internal static class DirectShowInterop
             // S_FALSE (1) means the category exists but is empty (no cameras attached).
             if (hr != 0 || monikerEnum is null)
             {
-                return names;
+                return devices;
             }
 
             var monikers = new IMoniker[1];
+            int rawIndex = 0;
             while (monikerEnum.Next(1, monikers, IntPtr.Zero) == 0)
             {
                 IMoniker moniker = monikers[0];
                 try
                 {
-                    names.Add(TryReadFriendlyName(moniker, fallback: $"Камера {names.Count}"));
+                    if (IsPhysicalHardwareDevice(moniker))
+                    {
+                        string name = TryReadFriendlyName(moniker, fallback: $"Камера {rawIndex}");
+                        devices.Add(new VideoInputDevice(rawIndex, name));
+                    }
                 }
                 finally
                 {
                     Marshal.ReleaseComObject(moniker);
+                    rawIndex++;
                 }
             }
         }
@@ -104,12 +126,97 @@ internal static class DirectShowInterop
             }
         }
 
-        return names;
+        return devices;
+    }
+
+    /// <summary>True if any registered video input device's friendly name matches (used to check whether the virtual camera driver is already installed).</summary>
+    public static bool AnyDeviceNameContains(string substring)
+    {
+        foreach (VideoInputDevice device in EnumerateVideoInputDevices_IncludingVirtual())
+        {
+            if (device.Name.Contains(substring, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Same as <see cref="EnumerateVideoInputDevices"/> but without the physical-hardware filter - used only for install-state checks like <see cref="AnyDeviceNameContains"/>.</summary>
+    private static List<VideoInputDevice> EnumerateVideoInputDevices_IncludingVirtual()
+    {
+        var devices = new List<VideoInputDevice>();
+        object? comEnumInstance = null;
+        IEnumMoniker? monikerEnum = null;
+
+        try
+        {
+            comEnumInstance = new SystemDeviceEnum();
+            var createDevEnum = (ICreateDevEnum)comEnumInstance;
+
+            Guid category = CLSID_VideoInputDeviceCategory;
+            int hr = createDevEnum.CreateClassEnumerator(ref category, out monikerEnum, 0);
+            if (hr != 0 || monikerEnum is null)
+            {
+                return devices;
+            }
+
+            var monikers = new IMoniker[1];
+            int rawIndex = 0;
+            while (monikerEnum.Next(1, monikers, IntPtr.Zero) == 0)
+            {
+                IMoniker moniker = monikers[0];
+                try
+                {
+                    devices.Add(new VideoInputDevice(rawIndex, TryReadFriendlyName(moniker, fallback: $"Камера {rawIndex}")));
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(moniker);
+                    rawIndex++;
+                }
+            }
+        }
+        catch (COMException)
+        {
+        }
+        finally
+        {
+            if (monikerEnum is not null)
+            {
+                Marshal.ReleaseComObject(monikerEnum);
+            }
+
+            if (comEnumInstance is not null)
+            {
+                Marshal.ReleaseComObject(comEnumInstance);
+            }
+        }
+
+        return devices;
+    }
+
+    private static bool IsPhysicalHardwareDevice(IMoniker moniker)
+    {
+        try
+        {
+            moniker.GetDisplayName(null!, null!, out string displayName);
+            // Real PnP hardware: "@device:pnp:\\?\usb#vid_...". Software-registered filters
+            // (virtual cameras, including our own Unity Video Capture output): "@device:sw:{...}".
+            return displayName.StartsWith("@device:pnp:", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (COMException)
+        {
+            // If we can't determine the kind, default to showing it rather than hiding a
+            // possibly-real device.
+            return true;
+        }
     }
 
     /// <summary>
     /// Returns the raw <see cref="IMoniker"/> for the Nth video input device (same order as
-    /// <see cref="EnumerateVideoInputDeviceNames"/> and the same order OpenCvSharp's DSHOW
+    /// <see cref="EnumerateVideoInputDevices"/> and the same order OpenCvSharp's DSHOW
     /// backend assigns device indices). The caller owns the returned moniker and must
     /// release it with <see cref="Marshal.ReleaseComObject"/> when done. Returns null if the
     /// index is out of range or no device enumerator is available.

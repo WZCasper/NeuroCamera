@@ -53,7 +53,7 @@ public static class ObsEquivalentCalculator
         double obsContrast = Math.Clamp(InvertObsStyle(parameters.Alpha), -4.0, 4.0);
         double obsBrightness = Math.Clamp(parameters.Beta / 255.0, -1.0, 1.0);
 
-        return new ObsColorCorrectionValues(obsGamma, obsContrast, obsBrightness, Saturation: 0.0, HueShift: 0.0, Opacity: 1.0);
+        return new ObsColorCorrectionValues(obsGamma, obsContrast, obsBrightness, Saturation: 0.0, HueShift: 0.0, Opacity: 100.0);
     }
 
     /// <summary>

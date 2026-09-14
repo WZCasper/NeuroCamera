@@ -39,7 +39,7 @@ public sealed class HardwareCameraController : IDisposable
 
     /// <summary>
     /// Attempts to open the hardware control interfaces for the given device index (same
-    /// index as <see cref="NeuroCamera.Interop.DirectShowInterop.EnumerateVideoInputDeviceNames"/>).
+    /// index as <see cref="NeuroCamera.Interop.DirectShowInterop.EnumerateVideoInputDevices"/>).
     /// Returns null if the device can't be bound or exposes neither control interface.
     /// </summary>
     public static HardwareCameraController? TryOpen(int deviceIndex)

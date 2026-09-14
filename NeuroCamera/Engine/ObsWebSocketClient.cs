@@ -9,16 +9,44 @@ using System.Threading.Tasks;
 namespace NeuroCamera.Engine;
 
 /// <summary>
-/// Minimal client for the obs-websocket v5 protocol (built into OBS 28+ by default, listening
-/// on ws://localhost:4455 unless changed under Tools -&gt; WebSocket Server Settings) - just
-/// enough to authenticate and push computed values into a "Color Correction" filter
-/// (<see cref="ObsEquivalentCalculator"/>) on a chosen source. Implements the real protocol
-/// handshake (Hello -&gt; Identify -&gt; Identified) including the SHA256-based challenge/salt
-/// authentication OBS uses when a password is set, and the SetSourceFilterSettings /
-/// CreateSourceFilter requests - not a simplified stand-in.
+/// Minimal client for the obs-websocket v5 protocol (built into OBS 28+ by default). In OBS,
+/// find the connection details under Инструменты (Tools) -&gt; Настройки WebSocket-сервера
+/// (WebSocket Server Settings) -&gt; Показать сведения о подключении (Show Connect Info): that
+/// dialog's "IP сервера" is this client's host, "Порт сервера" is the port, and "Пароль
+/// сервера" is the password (only needed if authentication is enabled, which it is by
+/// default).
+///
+/// Implements the real protocol handshake (Hello -&gt; Identify -&gt; Identified), including the
+/// SHA256-based challenge/salt authentication OBS uses, and the SetSourceFilterSettings /
+/// CreateSourceFilter requests used to push <see cref="ObsEquivalentCalculator"/>'s computed
+/// values into a "Color Correction" filter - not a simplified stand-in.
 /// </summary>
 public static class ObsWebSocketClient
 {
+    /// <summary>
+    /// Connects and authenticates only, without changing anything in OBS - lets the person
+    /// verify host/port/password are correct before trusting <see cref="ApplyColorCorrectionAsync"/>
+    /// to actually change a filter.
+    /// </summary>
+    public static async Task<(bool Success, string Message)> TestConnectionAsync(
+        string host, int port, string password, CancellationToken cancellationToken = default)
+    {
+        ClientWebSocket? ws = null;
+        try
+        {
+            ws = await ConnectAndIdentifyAsync(host, port, password, cancellationToken).ConfigureAwait(false);
+            return (true, "Подключение к OBS успешно установлено.");
+        }
+        catch (Exception ex)
+        {
+            return (false, DescribeConnectionFailure(ex));
+        }
+        finally
+        {
+            await CloseQuietlyAsync(ws, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>
     /// Connects to OBS, authenticates if a password is configured, and applies the given
     /// Color Correction values to the named filter on the named source - updating it if the
@@ -39,43 +67,7 @@ public static class ObsWebSocketClient
 
         try
         {
-            ws = new ClientWebSocket();
-            var uri = new Uri($"ws://{host}:{port}");
-
-            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            connectCts.CancelAfter(TimeSpan.FromSeconds(8));
-            await ws.ConnectAsync(uri, connectCts.Token).ConfigureAwait(false);
-
-            JsonDocument hello = await ReceiveJsonAsync(ws, cancellationToken).ConfigureAwait(false);
-            JsonElement helloD = hello.RootElement.GetProperty("d");
-            int rpcVersion = helloD.TryGetProperty("rpcVersion", out JsonElement rpcEl) ? rpcEl.GetInt32() : 1;
-
-            string? authString = null;
-            if (helloD.TryGetProperty("authentication", out JsonElement authEl))
-            {
-                string challenge = authEl.GetProperty("challenge").GetString() ?? "";
-                string salt = authEl.GetProperty("salt").GetString() ?? "";
-                authString = ComputeAuthString(password, salt, challenge);
-            }
-
-            var identifyData = new Dictionary<string, object?>
-            {
-                ["rpcVersion"] = rpcVersion,
-                ["eventSubscriptions"] = 0
-            };
-            if (authString is not null)
-            {
-                identifyData["authentication"] = authString;
-            }
-
-            await SendJsonAsync(ws, new Dictionary<string, object?> { ["op"] = 1, ["d"] = identifyData }, cancellationToken).ConfigureAwait(false);
-
-            JsonDocument identified = await ReceiveJsonAsync(ws, cancellationToken).ConfigureAwait(false);
-            int op = identified.RootElement.GetProperty("op").GetInt32();
-            if (op != 2)
-            {
-                return (false, "OBS не подтвердил подключение — проверьте пароль WebSocket-сервера.");
-            }
+            ws = await ConnectAndIdentifyAsync(host, port, password, cancellationToken).ConfigureAwait(false);
 
             var filterSettings = new Dictionary<string, object?>
             {
@@ -115,28 +107,87 @@ public static class ObsWebSocketClient
         }
         catch (Exception ex)
         {
-            return (false, $"Не удалось подключиться к OBS ({ex.Message}). Убедитесь, что в OBS включён WebSocket-сервер: Инструменты → Настройки WebSocket-сервера, и что хост/порт/пароль указаны верно.");
+            return (false, DescribeConnectionFailure(ex));
         }
         finally
         {
-            if (ws is not null)
-            {
-                try
-                {
-                    if (ws.State == WebSocketState.Open)
-                    {
-                        using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", closeCts.Token).ConfigureAwait(false);
-                    }
-                }
-                catch
-                {
-                    // Best-effort close - the connection is going away either way.
-                }
+            await CloseQuietlyAsync(ws, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
-                ws.Dispose();
+    private static string DescribeConnectionFailure(Exception ex) =>
+        $"Не удалось подключиться к OBS ({ex.Message}). Убедитесь, что в OBS включён WebSocket-сервер " +
+        "(Инструменты → Настройки WebSocket-сервера → флажок \"Включить сервер WebSocket\") и что " +
+        "хост/порт/пароль совпадают с тем, что показывает там же кнопка \"Показать сведения о подключении\".";
+
+    /// <summary>Opens the socket and completes the Hello/Identify/Identified handshake, throwing on any failure.</summary>
+    private static async Task<ClientWebSocket> ConnectAndIdentifyAsync(
+        string host, int port, string password, CancellationToken cancellationToken)
+    {
+        var ws = new ClientWebSocket();
+        var uri = new Uri($"ws://{host}:{port}");
+
+        using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            connectCts.CancelAfter(TimeSpan.FromSeconds(8));
+            await ws.ConnectAsync(uri, connectCts.Token).ConfigureAwait(false);
+        }
+
+        JsonDocument hello = await ReceiveJsonAsync(ws, cancellationToken).ConfigureAwait(false);
+        JsonElement helloD = hello.RootElement.GetProperty("d");
+        int rpcVersion = helloD.TryGetProperty("rpcVersion", out JsonElement rpcEl) ? rpcEl.GetInt32() : 1;
+
+        string? authString = null;
+        if (helloD.TryGetProperty("authentication", out JsonElement authEl))
+        {
+            string challenge = authEl.GetProperty("challenge").GetString() ?? "";
+            string salt = authEl.GetProperty("salt").GetString() ?? "";
+            authString = ComputeAuthString(password, salt, challenge);
+        }
+
+        var identifyData = new Dictionary<string, object?>
+        {
+            ["rpcVersion"] = rpcVersion,
+            ["eventSubscriptions"] = 0
+        };
+        if (authString is not null)
+        {
+            identifyData["authentication"] = authString;
+        }
+
+        await SendJsonAsync(ws, new Dictionary<string, object?> { ["op"] = 1, ["d"] = identifyData }, cancellationToken).ConfigureAwait(false);
+
+        JsonDocument identified = await ReceiveJsonAsync(ws, cancellationToken).ConfigureAwait(false);
+        int op = identified.RootElement.GetProperty("op").GetInt32();
+        if (op != 2)
+        {
+            throw new InvalidOperationException("OBS не подтвердил подключение — проверьте пароль WebSocket-сервера.");
+        }
+
+        return ws;
+    }
+
+    private static async Task CloseQuietlyAsync(ClientWebSocket? ws, CancellationToken cancellationToken)
+    {
+        if (ws is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (ws.State == WebSocketState.Open)
+            {
+                using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", closeCts.Token).ConfigureAwait(false);
             }
         }
+        catch
+        {
+            // Best-effort close - the connection is going away either way.
+        }
+
+        ws.Dispose();
     }
 
     private static string ComputeAuthString(string password, string salt, string challenge)

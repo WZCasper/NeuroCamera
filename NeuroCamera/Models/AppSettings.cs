@@ -23,5 +23,5 @@ public sealed class AppSettings
 
     public string ObsSourceName { get; set; } = "";
 
-    public string ObsFilterName { get; set; } = "NeuroCamera Коррекция цвета";
+    public string ObsFilterName { get; set; } = "NeuroCamera";
 }

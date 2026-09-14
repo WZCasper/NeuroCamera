@@ -172,33 +172,22 @@
 
                     <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
 
-                    <!-- OBS equivalent values + apply -->
-                    <TextBlock Text="ЭКВИВАЛЕНТ ДЛЯ OBS" FontSize="11" FontWeight="Bold"
+                    <!-- OBS connection -->
+                    <TextBlock Text="ПОДКЛЮЧЕНИЕ К OBS" FontSize="11" FontWeight="Bold"
                                Foreground="{StaticResource BrushTextSecondary}" Margin="0,0,0,8"/>
-                    <TextBlock Text="Те же значения, что и в фильтре OBS «Коррекция цвета» — можно перенести вручную или нажать «Применить в OBS»."
-                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
-                               TextWrapping="Wrap" Margin="0,0,0,10"/>
-                    <Border Background="{StaticResource BrushPanelAlt}" CornerRadius="10" Padding="12">
-                        <TextBlock Text="{Binding ObsEquivalentText}" FontSize="12" TextWrapping="Wrap"
-                                   Foreground="{StaticResource BrushTextPrimary}"/>
-                    </Border>
+                    <TextBlock TextWrapping="Wrap" Foreground="{StaticResource BrushTextDisabled}" FontSize="10" Margin="0,0,0,10">
+                        В OBS: Инструменты → Настройки WebSocket-сервера → включите сервер → кнопка
+                        «Показать сведения о подключении». Оттуда возьмите «IP сервера», «Порт сервера» и «Пароль сервера».
+                    </TextBlock>
 
-                    <TextBlock Text="Имя источника камеры в OBS" FontSize="10"
-                               Foreground="{StaticResource BrushTextDisabled}" Margin="0,12,0,4"/>
-                    <TextBox Text="{Binding ObsSourceName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
-
-                    <TextBlock Text="Имя фильтра «Коррекция цвета»" FontSize="10"
-                               Foreground="{StaticResource BrushTextDisabled}" Margin="0,10,0,4"/>
-                    <TextBox Text="{Binding ObsFilterName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
-
-                    <Grid Margin="0,10,0,0">
+                    <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="10"/>
                             <ColumnDefinition Width="90"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0">
-                            <TextBlock Text="Хост WebSocket" FontSize="10"
+                            <TextBlock Text="IP / хост сервера OBS" FontSize="10"
                                        Foreground="{StaticResource BrushTextDisabled}" Margin="0,0,0,4"/>
                             <TextBox Text="{Binding ObsHost, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
                         </StackPanel>
@@ -209,22 +198,67 @@
                         </StackPanel>
                     </Grid>
 
-                    <TextBlock Text="Пароль WebSocket-сервера (если задан в OBS)" FontSize="10"
+                    <TextBlock Text="Пароль сервера" FontSize="10"
                                Foreground="{StaticResource BrushTextDisabled}" Margin="0,10,0,4"/>
                     <PasswordBox x:Name="ObsPasswordBox" PasswordChanged="ObsPasswordBox_PasswordChanged"/>
+
+                    <Button Content="Проверить подключение"
+                            Command="{Binding TestObsConnectionCommand}"
+                            Style="{StaticResource SecondaryButton}"
+                            Margin="0,10,0,0"
+                            HorizontalAlignment="Stretch"/>
+
+                    <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,18,0,18"/>
+
+                    <!-- OBS target + equivalent values + apply -->
+                    <TextBlock Text="КУДА ПРИМЕНИТЬ" FontSize="11" FontWeight="Bold"
+                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,0,0,8"/>
+                    <TextBlock Text="Имя источника камеры в OBS (точно как в списке источников)" FontSize="10"
+                               Foreground="{StaticResource BrushTextDisabled}" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding ObsSourceName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <TextBlock Text="Имя фильтра «Коррекция цвета»" FontSize="10"
+                               Foreground="{StaticResource BrushTextDisabled}" Margin="0,10,0,4"/>
+                    <TextBox Text="{Binding ObsFilterName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                    <TextBlock Text="ЗНАЧЕНИЯ ДЛЯ ПЕРЕНОСА" FontSize="11" FontWeight="Bold"
+                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,18,0,8"/>
+                    <TextBlock Text="Те же единицы, что в фильтре OBS «Коррекция цвета» — перенесите вручную или нажмите «Применить в OBS» ниже."
+                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
+                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+                    <Border Background="{StaticResource BrushPanelAlt}" CornerRadius="10" Padding="12">
+                        <ItemsControl ItemsSource="{Binding ObsValueRows}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12"
+                                                   VerticalAlignment="Center" Foreground="{StaticResource BrushTextSecondary}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="13"
+                                                   FontFamily="Consolas" VerticalAlignment="Center"
+                                                   Foreground="{StaticResource BrushTextPrimary}" Margin="0,0,10,0"/>
+                                        <Button Grid.Column="2" Content="Копировать" Command="{Binding CopyCommand}"
+                                                Style="{StaticResource SecondaryButton}" FontSize="10" Padding="8,4"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
 
                     <Button Content="Применить в OBS"
                             Command="{Binding ApplyToObsCommand}"
                             Style="{StaticResource AccentButton}"
                             Margin="0,14,0,0"
                             HorizontalAlignment="Stretch"/>
-                    <TextBlock Text="{Binding ObsApplyStatusText}"
+                    <TextBlock Text="{Binding ObsStatusText}"
                                Foreground="{StaticResource BrushCyan}" FontSize="11"
                                TextWrapping="Wrap" Margin="0,8,0,0"
-                               Visibility="{Binding ObsApplyStatusText, Converter={StaticResource StringToVisibilityConverter}}"/>
-                    <TextBlock Text="Требуется включённый WebSocket-сервер в OBS: Инструменты → Настройки WebSocket-сервера."
-                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
-                               TextWrapping="Wrap" Margin="0,6,0,0"/>
+                               Visibility="{Binding ObsStatusText, Converter={StaticResource StringToVisibilityConverter}}"/>
 
                     <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
 

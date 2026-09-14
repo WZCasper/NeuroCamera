@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Threading.Tasks;
+using NeuroCamera.Interop;
 
 namespace NeuroCamera.Engine;
 
@@ -19,15 +20,27 @@ namespace NeuroCamera.Engine;
 public static class VirtualCameraInstaller
 {
     private const string Filter64Url = "https://raw.githubusercontent.com/schellingb/UnityCapture/master/Install/UnityCaptureFilter64.dll";
+    private const string DeviceFriendlyName = "Unity Video Capture";
 
     /// <summary>
     /// Downloads and registers the virtual camera driver. Triggers a native Windows UAC
     /// elevation prompt (registering a DirectShow filter requires admin rights); returns a
     /// human-readable outcome message either way instead of throwing for expected failures
     /// (network issues, the user declining the UAC prompt, regsvr32 rejecting the DLL).
+    ///
+    /// Checks whether the device is already registered before touching any files: re-running
+    /// this after a previous successful install would otherwise try to overwrite a DLL that a
+    /// currently-running consumer (OBS, Teams, the Windows Camera app) already has loaded,
+    /// which fails with a file-in-use error - a real, expected condition, not a bug, but one
+    /// worth avoiding entirely rather than reporting as a scary failure.
     /// </summary>
     public static async Task<(bool Success, string Message)> InstallAsync()
     {
+        if (DirectShowInterop.AnyDeviceNameContains(DeviceFriendlyName))
+        {
+            return (true, $"Виртуальная камера уже установлена и зарегистрирована как \"{DeviceFriendlyName}\".");
+        }
+
         string installDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "NeuroCamera", "UnityCapture");
@@ -38,12 +51,20 @@ public static class VirtualCameraInstaller
         {
             Directory.CreateDirectory(installDir);
 
-            using (var http = new HttpClient())
+            // Only download if we don't already have a local copy - avoids ever attempting to
+            // overwrite a file some other process might currently have open.
+            if (!File.Exists(dllPath))
             {
-                http.Timeout = TimeSpan.FromSeconds(30);
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
                 byte[] dllBytes = await http.GetByteArrayAsync(Filter64Url).ConfigureAwait(false);
                 await File.WriteAllBytesAsync(dllPath, dllBytes).ConfigureAwait(false);
             }
+        }
+        catch (IOException) when (File.Exists(dllPath))
+        {
+            // The file exists but couldn't be (over)written - almost certainly because it's
+            // already loaded by a running process, which means it's already registered.
+            // Fall through and try regsvr32 on the existing copy rather than failing here.
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
         {
@@ -69,7 +90,7 @@ public static class VirtualCameraInstaller
             await process.WaitForExitAsync().ConfigureAwait(false);
 
             return process.ExitCode == 0
-                ? (true, "Готово: виртуальная камера \"Unity Video Capture\" установлена. Откройте её в Zoom/Teams/OBS.")
+                ? (true, $"Готово: виртуальная камера \"{DeviceFriendlyName}\" установлена. Откройте её в Zoom/Teams/OBS хотя бы один раз, чтобы NeuroCamera смогла подключиться.")
                 : (false, $"regsvr32 завершился с ошибкой (код {process.ExitCode}).");
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
