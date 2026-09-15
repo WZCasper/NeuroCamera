@@ -26,6 +26,8 @@ public sealed class CameraControlSliderViewModel : ObservableObject
     }
 
     public string DisplayName => _setting.DisplayName;
+    public CameraControlKind Kind => _setting.Kind;
+    public int PropertyIndex => _setting.PropertyIndex;
     public int Min => _setting.Min;
     public int Max => _setting.Max;
     public int Step => _setting.Step;

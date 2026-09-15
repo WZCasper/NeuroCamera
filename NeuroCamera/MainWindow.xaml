@@ -23,14 +23,30 @@
         </Grid.RowDefinitions>
 
         <!-- ===================== Header ===================== -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,22">
-            <Border Width="6" Height="40" CornerRadius="3" Background="{StaticResource BrushAccentGradient}"/>
-            <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
-                <TextBlock Text="NeuroCamera" FontSize="26" FontWeight="Bold"/>
-                <TextBlock Text="Автоматическая нейрокоррекция изображения в реальном времени"
-                           Foreground="{StaticResource BrushTextSecondary}" FontSize="13"/>
+        <Grid Grid.Row="0" Margin="0,0,0,22">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                <Border Width="6" Height="40" CornerRadius="3" Background="{StaticResource BrushAccentGradient}"/>
+                <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="NeuroCamera" FontSize="26" FontWeight="Bold"/>
+                    <TextBlock Text="Автоматическая нейрокоррекция изображения в реальном времени"
+                               Foreground="{StaticResource BrushTextSecondary}" FontSize="13"/>
+                </StackPanel>
             </StackPanel>
-        </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Content="☕ Поддержать проект" Command="{Binding OpenDonateLinkCommand}"
+                        Style="{StaticResource SecondaryButton}" FontSize="12" Padding="12,8" Margin="0,0,10,0"/>
+                <Button Command="{Binding OpenDeveloperContactCommand}"
+                        Style="{StaticResource SecondaryButton}" FontSize="12" Padding="12,8">
+                    <TextBlock Text="亗 Casper"/>
+                </Button>
+            </StackPanel>
+        </Grid>
 
         <!-- ===================== Main content ===================== -->
         <Grid Grid.Row="1">
@@ -128,6 +144,12 @@
                                    Foreground="{StaticResource BrushCyan}" FontSize="11" TextWrapping="Wrap"/>
                     </Border>
 
+                    <Border Background="{StaticResource BrushPanelAlt}" CornerRadius="10" Padding="10" Margin="0,10,0,0"
+                            Visibility="{Binding OverexposureHintVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBlock Text="{Binding OverexposureHintText}"
+                                   Foreground="{StaticResource BrushDanger}" FontSize="11" TextWrapping="Wrap"/>
+                    </Border>
+
                     <TextBlock Text="БЫСТРАЯ ЯРКОСТЬ" FontSize="11" FontWeight="Bold"
                                Foreground="{StaticResource BrushTextSecondary}" Margin="0,18,0,8"/>
                     <Grid>
@@ -145,30 +167,6 @@
                     <TextBlock Text="Мгновенная подстройка сверх автонастройки — без повторных 15 секунд."
                                Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
                                TextWrapping="Wrap" Margin="0,6,0,0"/>
-
-                    <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
-
-                    <!-- Virtual camera status -->
-                    <TextBlock Text="ВИРТУАЛЬНАЯ КАМЕРА" FontSize="11" FontWeight="Bold"
-                               Foreground="{StaticResource BrushTextSecondary}" Margin="0,0,0,8"/>
-                    <Border Background="{StaticResource BrushPanelAlt}" CornerRadius="10" Padding="12">
-                        <TextBlock Text="{Binding VirtualCameraStatusText}"
-                                   FontSize="12" TextWrapping="Wrap"
-                                   Foreground="{StaticResource BrushTextSecondary}"/>
-                    </Border>
-
-                    <Button Content="Установить виртуальную камеру"
-                            Command="{Binding InstallVirtualCameraCommand}"
-                            Style="{StaticResource SecondaryButton}"
-                            Margin="0,10,0,0"
-                            HorizontalAlignment="Stretch"/>
-                    <TextBlock Text="Скачивает и регистрирует свободный драйвер UnityCapture (нужно один раз, потребует прав администратора)."
-                               Foreground="{StaticResource BrushTextDisabled}" FontSize="10"
-                               TextWrapping="Wrap" Margin="0,6,0,0"/>
-                    <TextBlock Text="{Binding VirtualCameraInstallStatusText}"
-                               Foreground="{StaticResource BrushCyan}" FontSize="11"
-                               TextWrapping="Wrap" Margin="0,6,0,0"
-                               Visibility="{Binding VirtualCameraInstallStatusText, Converter={StaticResource StringToVisibilityConverter}}"/>
 
                     <Rectangle Height="1" Fill="{StaticResource BrushBorder}" Margin="0,22,0,18"/>
 

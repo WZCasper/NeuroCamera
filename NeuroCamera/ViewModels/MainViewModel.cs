@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -13,24 +14,50 @@ namespace NeuroCamera.ViewModels;
 
 /// <summary>
 /// UI-facing state and commands for <c>MainWindow</c>. Owns the <see cref="VideoEngine"/>
-/// (software correction + preview + virtual-camera output) and, independently, a
-/// <see cref="HardwareCameraController"/> for the selected device's own driver-level
-/// properties (brightness/exposure/etc., exposed as sliders). Every background-thread event
-/// from <see cref="VideoEngine"/> is marshalled onto the WPF Dispatcher before touching any
-/// bindable property, so the view model itself is safe to bind directly from XAML.
+/// (software correction + preview) and, independently, a <see cref="HardwareCameraController"/>
+/// for the selected device's own driver-level properties (brightness/exposure/etc.).
 ///
-/// Camera choice, resolution, OBS connection details, and the last completed calibration are
-/// persisted via <see cref="SettingsStore"/> so the app comes back up already configured next
-/// time (the OBS password is the one exception - never written to disk).
+/// Автонастройка (auto-tune) is hardware-first: while <see cref="VideoEngine"/> runs its
+/// 15-second calibration, this view model listens to the same live per-frame measurements
+/// (<see cref="CalibrationProgressEventArgs.FaceLuminance"/> / <see cref="CalibrationProgressEventArgs.NoiseLevel"/>)
+/// and drives the real hardware sliders (<see cref="CameraControlSliderViewModel.Value"/>)
+/// toward a good result with closed-loop feedback - so the sliders visibly move during
+/// calibration and the picture is corrected at the source, not only after capture. A lighter
+/// software correction layer still runs on top for whatever the hardware alone cannot reach
+/// (see <see cref="CalibrationEngine.HardwareConvergenceSeconds"/> equivalent windowing there).
+///
+/// Every background-thread event from <see cref="VideoEngine"/> is marshalled onto the WPF
+/// Dispatcher before touching any bindable property or hardware control, since
+/// <see cref="HardwareCameraController"/> is COM/STA-bound to the UI thread.
 /// </summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
+    private const double HardwareTargetLuminance = 140.0;
+    private const double HardwareLuminanceDeadband = 6.0;
+    private const double OverexposureReportThreshold = 20.0;
+    private static readonly TimeSpan HardwareAdjustmentThrottle = TimeSpan.FromMilliseconds(220);
+
     private readonly VideoEngine _videoEngine;
     private readonly System.Windows.Threading.Dispatcher _dispatcher;
     private readonly AppSettings _settings;
 
     private HardwareCameraController? _hardwareController;
     private ObsEquivalentCalculator.ObsColorCorrectionValues? _lastObsValues;
+
+    // Resolved hardware "levers" the auto-tune coordinator drives directly - re-resolved every
+    // time the camera control list is (re)built, since they depend on what this specific
+    // device's driver actually reports supporting.
+    private CameraControlSliderViewModel? _brightnessLever;
+    private CameraControlSliderViewModel? _gainLever;
+    private CameraControlSliderViewModel? _exposureLever;
+    private CameraControlSliderViewModel? _sharpnessLever;
+    private CameraControlSliderViewModel? _saturationLever;
+    private CameraControlSliderViewModel? _whiteBalanceLever;
+
+    private bool _hardwareWhiteBalanceHandled;
+    private bool _hardwareSharpnessSaturationHandled;
+    private DateTime _lastHardwareExposureAdjustment = DateTime.MinValue;
+    private double? _lastMeasuredFaceLuminance;
 
     private CameraDeviceInfo? _selectedCamera;
     private CaptureResolution _selectedResolution;
@@ -39,12 +66,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isCalibrating;
     private double _calibrationProgress;
     private string _calibrationStatusText = "Нажмите «Автонастройка», чтобы откалибровать камеру за 15 секунд.";
-    private string _virtualCameraStatusText = "Виртуальная камера не подключена.";
-    private string _virtualCameraInstallStatusText = "";
-    private bool _isInstallingVirtualCamera;
     private string _resolutionStatusText = "";
     private double _manualBrightnessOffset;
     private bool _darkSceneHintVisible;
+    private bool _overexposureHintVisible;
+    private string _overexposureHintText = "";
     private string _obsSourceName;
     private string _obsFilterName;
     private string _obsHost;
@@ -69,7 +95,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _videoEngine.FrameReady += OnFrameReady;
         _videoEngine.CalibrationProgressChanged += OnCalibrationProgressChanged;
         _videoEngine.CalibrationCompleted += OnCalibrationCompleted;
-        _videoEngine.VirtualCameraStatusChanged += OnVirtualCameraStatusChanged;
         _videoEngine.ResolutionStatusChanged += OnResolutionStatusChanged;
         _videoEngine.ErrorOccurred += OnErrorOccurred;
 
@@ -84,10 +109,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         ToggleStreamCommand = new RelayCommand(ToggleStream, () => SelectedCamera is not null);
         AutoTuneCommand = new RelayCommand(RunAutoTune, () => IsStreaming && !IsCalibrating);
-        InstallVirtualCameraCommand = new RelayCommand(() => _ = InstallVirtualCameraAsync(), () => !IsInstallingVirtualCamera);
         ResetCameraControlsCommand = new RelayCommand(ResetCameraControls, () => CameraControls.Count > 0);
         TestObsConnectionCommand = new RelayCommand(() => _ = TestObsConnectionAsync(), () => !IsObsBusy);
         ApplyToObsCommand = new RelayCommand(() => _ = ApplyToObsAsync(), () => !IsObsBusy && _lastObsValues is not null);
+        OpenDonateLinkCommand = new RelayCommand(() => OpenUrl("https://dalink.to/wz_casper"));
+        OpenDeveloperContactCommand = new RelayCommand(() => OpenUrl("https://t.me/WZ_Casper"));
 
         RefreshCameras();
     }
@@ -97,14 +123,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>Resolution presets offered in the UI, from SD up to 4K UHD.</summary>
     public ObservableCollection<CaptureResolution> Resolutions { get; } = new(CaptureResolutions.Presets);
 
-    /// <summary>Live hardware camera property sliders (brightness, exposure, white balance, etc.) for the currently streaming device.</summary>
+    /// <summary>
+    /// Live hardware camera property sliders (brightness, exposure, white balance, etc.) for
+    /// the currently streaming device. During Автонастройка, the relevant sliders' values are
+    /// driven directly by the calibration's live measurements (see class remarks) and move in
+    /// real time, exactly reflecting what is being written to the physical camera.
+    /// </summary>
     public ObservableCollection<CameraControlSliderViewModel> CameraControls { get; } = new();
 
-    /// <summary>
-    /// NeuroCamera's current correction expressed as OBS Color Correction filter values, one
-    /// row per parameter with its own copy-to-clipboard button (see
-    /// <see cref="ObsEquivalentCalculator"/>). Empty until the first calibration completes.
-    /// </summary>
+    /// <summary>NeuroCamera's current correction expressed as OBS Color Correction filter values, one row per parameter with its own copy button.</summary>
     public ObservableCollection<ObsValueRowViewModel> ObsValueRows { get; } = new();
 
     public CameraDeviceInfo? SelectedCamera
@@ -200,36 +227,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _calibrationStatusText, value);
     }
 
-    /// <summary>
-    /// Live status of the virtual-camera connection, including a running frames-sent count
-    /// once connected and the specific failure reason when it isn't - so a problem is
-    /// something the person can read directly, not something they have to guess at from what
-    /// OBS shows.
-    /// </summary>
-    public string VirtualCameraStatusText
-    {
-        get => _virtualCameraStatusText;
-        private set => SetProperty(ref _virtualCameraStatusText, value);
-    }
-
-    public string VirtualCameraInstallStatusText
-    {
-        get => _virtualCameraInstallStatusText;
-        private set => SetProperty(ref _virtualCameraInstallStatusText, value);
-    }
-
-    public bool IsInstallingVirtualCamera
-    {
-        get => _isInstallingVirtualCamera;
-        private set
-        {
-            if (SetProperty(ref _isInstallingVirtualCamera, value))
-            {
-                RelayCommand.RaiseCanExecuteChanged();
-            }
-        }
-    }
-
     /// <summary>What resolution/FPS the camera actually negotiated, which may differ from what was requested.</summary>
     public string ResolutionStatusText
     {
@@ -257,28 +254,38 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>True after a calibration where the measured face was quite dark - suggests raising hardware Gain/Exposure first.</summary>
+    /// <summary>True after a calibration where the measured face was quite dark before correction - hardware Gain/Exposure alone could not fully compensate for a genuine lack of light.</summary>
     public bool DarkSceneHintVisible
     {
         get => _darkSceneHintVisible;
         private set => SetProperty(ref _darkSceneHintVisible, value);
     }
 
-    /// <summary>Exact source name as it appears in OBS's Sources list - required to target the right filter.</summary>
+    /// <summary>True if the face still measured meaningfully brighter than target after calibration finished - names a specific slider to pull down.</summary>
+    public bool OverexposureHintVisible
+    {
+        get => _overexposureHintVisible;
+        private set => SetProperty(ref _overexposureHintVisible, value);
+    }
+
+    public string OverexposureHintText
+    {
+        get => _overexposureHintText;
+        private set => SetProperty(ref _overexposureHintText, value);
+    }
+
     public string ObsSourceName
     {
         get => _obsSourceName;
         set => SetProperty(ref _obsSourceName, value);
     }
 
-    /// <summary>Name of the Color Correction filter to create/update on that source.</summary>
     public string ObsFilterName
     {
         get => _obsFilterName;
         set => SetProperty(ref _obsFilterName, value);
     }
 
-    /// <summary>IP/host of the OBS WebSocket server - shown in OBS under Инструменты → Настройки WebSocket-сервера → Показать сведения о подключении as "IP сервера".</summary>
     public string ObsHost
     {
         get => _obsHost;
@@ -298,7 +305,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public string ObsPassword { get; set; } = "";
 
-    /// <summary>Result of the most recent Test-connection or Apply action against OBS.</summary>
     public string ObsStatusText
     {
         get => _obsStatusText;
@@ -327,10 +333,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public RelayCommand ToggleStreamCommand { get; }
     public RelayCommand AutoTuneCommand { get; }
-    public RelayCommand InstallVirtualCameraCommand { get; }
     public RelayCommand ResetCameraControlsCommand { get; }
     public RelayCommand TestObsConnectionCommand { get; }
     public RelayCommand ApplyToObsCommand { get; }
+    public RelayCommand OpenDonateLinkCommand { get; }
+    public RelayCommand OpenDeveloperContactCommand { get; }
 
     private void RefreshCameras()
     {
@@ -361,7 +368,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IsCalibrating = false;
             PreviewFrame = null;
             ResolutionStatusText = "";
-            VirtualCameraStatusText = "Виртуальная камера не подключена.";
             ClearHardwareControls();
             return;
         }
@@ -383,6 +389,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             ErrorText = null;
             DarkSceneHintVisible = false;
+            OverexposureHintVisible = false;
+            _hardwareWhiteBalanceHandled = false;
+            _hardwareSharpnessSaturationHandled = false;
+            _lastHardwareExposureAdjustment = DateTime.MinValue;
+            _lastMeasuredFaceLuminance = null;
+
             _videoEngine.RequestCalibration();
             IsCalibrating = true;
         }
@@ -410,6 +422,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
         }
 
+        ResolveHardwareLevers();
         RelayCommand.RaiseCanExecuteChanged();
     }
 
@@ -418,8 +431,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CameraControls.Clear();
         _hardwareController?.Dispose();
         _hardwareController = null;
+        ResolveHardwareLevers();
         RelayCommand.RaiseCanExecuteChanged();
     }
+
+    /// <summary>Re-finds the specific sliders the auto-tune coordinator drives, since which properties a device supports is device-specific.</summary>
+    private void ResolveHardwareLevers()
+    {
+        _brightnessLever = FindControl(CameraControlKind.VideoProcAmp, (int)VideoProcAmpProperty.Brightness);
+        _gainLever = FindControl(CameraControlKind.VideoProcAmp, (int)VideoProcAmpProperty.Gain);
+        _exposureLever = FindControl(CameraControlKind.CameraControl, (int)CameraControlProperty.Exposure);
+        _sharpnessLever = FindControl(CameraControlKind.VideoProcAmp, (int)VideoProcAmpProperty.Sharpness);
+        _saturationLever = FindControl(CameraControlKind.VideoProcAmp, (int)VideoProcAmpProperty.Saturation);
+        _whiteBalanceLever = FindControl(CameraControlKind.VideoProcAmp, (int)VideoProcAmpProperty.WhiteBalance);
+    }
+
+    private CameraControlSliderViewModel? FindControl(CameraControlKind kind, int propertyIndex) =>
+        CameraControls.FirstOrDefault(c => c.Kind == kind && c.PropertyIndex == propertyIndex);
 
     private void ResetCameraControls()
     {
@@ -429,15 +457,145 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task InstallVirtualCameraAsync()
+    /// <summary>
+    /// Runs once per calibration phase-1 frame: switches the camera's own White Balance to
+    /// Auto if the driver supports it, rather than computing a one-shot Kelvin value from a
+    /// single frame - a continuously-adjusting hardware AWB is generally more reliable than a
+    /// single closed-form estimate.
+    /// </summary>
+    private void EnsureHardwareWhiteBalanceAuto()
     {
-        IsInstallingVirtualCamera = true;
-        VirtualCameraInstallStatusText = "Скачиваю и устанавливаю драйвер...";
+        if (_hardwareWhiteBalanceHandled)
+        {
+            return;
+        }
 
-        (bool _, string message) = await VirtualCameraInstaller.InstallAsync();
+        if (_whiteBalanceLever is { SupportsAuto: true } wb && !wb.IsAuto)
+        {
+            wb.IsAuto = true;
+        }
 
-        VirtualCameraInstallStatusText = message;
-        IsInstallingVirtualCamera = false;
+        _hardwareWhiteBalanceHandled = true;
+    }
+
+    /// <summary>
+    /// Closed-loop proportional control: on every live luminance measurement during the
+    /// exposure phase, nudges the first available lever (Brightness, then Gain, then Exposure)
+    /// toward the target, re-measuring on the next frame to correct further - rather than
+    /// computing a single blind formula, this reacts to what the camera actually produces,
+    /// which is far more robust across different camera models' real behavior. Assigning
+    /// straight to a CameraControlSliderViewModel.Value both writes the hardware and updates
+    /// the visible slider in the same step, so it moves in real time during Автонастройка.
+    /// </summary>
+    private void AdjustHardwareExposureTowardTarget(double currentLuminance)
+    {
+        if (DateTime.UtcNow - _lastHardwareExposureAdjustment < HardwareAdjustmentThrottle)
+        {
+            return;
+        }
+
+        double error = HardwareTargetLuminance - currentLuminance;
+        if (Math.Abs(error) < HardwareLuminanceDeadband)
+        {
+            return;
+        }
+
+        foreach (CameraControlSliderViewModel? lever in new[] { _brightnessLever, _gainLever, _exposureLever })
+        {
+            if (lever is null)
+            {
+                continue;
+            }
+
+            double range = Math.Max(lever.Max - lever.Min, 1);
+            int step = (int)Math.Round(Math.Clamp(error / 255.0, -0.08, 0.08) * range);
+            if (step == 0)
+            {
+                step = error > 0 ? 1 : -1;
+            }
+
+            int newValue = Math.Clamp(lever.Value + step, lever.Min, lever.Max);
+            if (newValue != lever.Value)
+            {
+                lever.Value = newValue;
+                _lastHardwareExposureAdjustment = DateTime.UtcNow;
+                return;
+            }
+            // This lever is already at its limit in the needed direction - try the next one.
+        }
+    }
+
+    /// <summary>
+    /// Runs once in the noise-reduction phase: sets Sharpness lower when measured sensor noise
+    /// is higher (so sharpening does not amplify grain into visible artifacts) and nudges
+    /// Saturation a modest, deliberately small step above the driver's own default - a single
+    /// informed adjustment rather than an iterative chase, since both properties are far less
+    /// sensitive to lighting changes than exposure.
+    /// </summary>
+    private void AdjustHardwareSharpnessAndSaturation(double noiseLevel)
+    {
+        if (_hardwareSharpnessSaturationHandled)
+        {
+            return;
+        }
+
+        if (_sharpnessLever is { } sharpness)
+        {
+            double range = sharpness.Max - sharpness.Min;
+            double fraction = Math.Clamp(0.55 - (noiseLevel / 40.0), 0.25, 0.65);
+            int target = sharpness.Min + (int)Math.Round(range * fraction);
+            sharpness.Value = Math.Clamp(target, sharpness.Min, sharpness.Max);
+        }
+
+        if (_saturationLever is { } saturation)
+        {
+            double range = saturation.Max - saturation.Min;
+            int target = saturation.DefaultValue + (int)Math.Round(range * 0.08);
+            saturation.Value = Math.Clamp(target, saturation.Min, saturation.Max);
+        }
+
+        _hardwareSharpnessSaturationHandled = true;
+    }
+
+    /// <summary>After calibration ends, checks the last live measurement and, if the face is still notably above target, names the currently-highest lever as a concrete manual suggestion.</summary>
+    private void UpdateOverexposureHint()
+    {
+        if (_lastMeasuredFaceLuminance is double luminance && luminance > HardwareTargetLuminance + OverexposureReportThreshold)
+        {
+            CameraControlSliderViewModel? culprit = FindHighestRelativeLever(_brightnessLever, _gainLever, _exposureLever);
+            OverexposureHintText = culprit is not null
+                ? $"Лицо всё ещё пересвечено. Попробуйте вручную уменьшить ползунок «{culprit.DisplayName}» в разделе «Ручные настройки камеры»."
+                : "Лицо всё ещё пересвечено. Попробуйте вручную уменьшить яркость в разделе «Ручные настройки камеры».";
+            OverexposureHintVisible = true;
+        }
+        else
+        {
+            OverexposureHintVisible = false;
+        }
+    }
+
+    private static CameraControlSliderViewModel? FindHighestRelativeLever(params CameraControlSliderViewModel?[] levers)
+    {
+        CameraControlSliderViewModel? best = null;
+        double bestFraction = -1;
+
+        foreach (CameraControlSliderViewModel? lever in levers)
+        {
+            if (lever is null)
+            {
+                continue;
+            }
+
+            double range = Math.Max(lever.Max - lever.Min, 1);
+            double fraction = (lever.Value - lever.Min) / range;
+            if (fraction > bestFraction)
+            {
+                bestFraction = fraction;
+                best = lever;
+            }
+        }
+
+        return best;
     }
 
     private void RecomputeObsEquivalent(CalibrationParameters baseParameters)
@@ -512,6 +670,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private static void OpenUrl(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+        }
+        catch
+        {
+            // Best-effort - nothing more constructive to do if the OS has no URL handler.
+        }
+    }
+
     private void PersistSettings() => SettingsStore.Save(_settings);
 
     private void OnFrameReady(object? sender, BitmapSource frame) =>
@@ -525,6 +695,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             IsCalibrating = e.Phase is CalibrationPhase.WhiteBalance
                 or CalibrationPhase.FaceExposure
                 or CalibrationPhase.NoiseReduction;
+
+            switch (e.Phase)
+            {
+                case CalibrationPhase.WhiteBalance:
+                    EnsureHardwareWhiteBalanceAuto();
+                    break;
+
+                case CalibrationPhase.FaceExposure:
+                    if (e.FaceLuminance is double luminance)
+                    {
+                        _lastMeasuredFaceLuminance = luminance;
+                        AdjustHardwareExposureTowardTarget(luminance);
+                    }
+                    break;
+
+                case CalibrationPhase.NoiseReduction:
+                    if (e.NoiseLevel is double noise)
+                    {
+                        AdjustHardwareSharpnessAndSaturation(noise);
+                    }
+                    break;
+            }
         });
 
     private void OnCalibrationCompleted(object? sender, CalibrationParameters parameters) =>
@@ -534,14 +726,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             CalibrationProgress = 100;
             CalibrationStatusText = "Автонастройка завершена — параметры применены к видеопотоку.";
             DarkSceneHintVisible = parameters.SceneWasDark;
+            UpdateOverexposureHint();
             RecomputeObsEquivalent(parameters);
 
             _settings.LastCalibration = parameters;
             PersistSettings();
         });
-
-    private void OnVirtualCameraStatusChanged(object? sender, string status) =>
-        _dispatcher.BeginInvoke(() => VirtualCameraStatusText = status);
 
     private void OnResolutionStatusChanged(object? sender, string status) =>
         _dispatcher.BeginInvoke(() => ResolutionStatusText = status);

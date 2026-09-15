@@ -7,18 +7,15 @@ using OpenCvSharp;
 namespace NeuroCamera.Engine;
 
 /// <summary>
-/// Owns the entire capture -&gt; calibrate -&gt; correct -&gt; preview -&gt; virtual-camera pipeline on a
-/// single dedicated background thread. Nothing in this class ever touches the WPF
-/// Dispatcher; it only raises plain .NET events, which callers marshal to the UI thread
-/// themselves. This guarantees the OpenCV work never runs on, and never blocks, the UI thread.
+/// Owns the entire capture -&gt; calibrate -&gt; correct -&gt; preview pipeline on a single dedicated
+/// background thread. Nothing in this class ever touches the WPF Dispatcher; it only raises
+/// plain .NET events, which callers marshal to the UI thread themselves. This guarantees the
+/// OpenCV work never runs on, and never blocks, the UI thread.
 /// </summary>
 public sealed class VideoEngine : IDisposable
 {
-    private static readonly TimeSpan VirtualCamRetryInterval = TimeSpan.FromSeconds(2);
-
     private readonly ImageProcessor _imageProcessor;
     private readonly CalibrationEngine _calibrationEngine;
-    private readonly VirtualCamWriter _virtualCamWriter;
 
     private CancellationTokenSource? _cts;
     private Thread? _workerThread;
@@ -40,8 +37,6 @@ public sealed class VideoEngine : IDisposable
             _currentParameters = parameters;
             CalibrationCompleted?.Invoke(this, parameters);
         };
-
-        _virtualCamWriter = new VirtualCamWriter();
     }
 
     /// <summary>True while the dedicated capture thread is alive.</summary>
@@ -58,9 +53,6 @@ public sealed class VideoEngine : IDisposable
 
     /// <summary>Raised on the background thread once auto-tune finishes with new parameters.</summary>
     public event EventHandler<CalibrationParameters>? CalibrationCompleted;
-
-    /// <summary>Raised on the background thread whenever the virtual camera connection state changes.</summary>
-    public event EventHandler<string>? VirtualCameraStatusChanged;
 
     /// <summary>
     /// Raised once, right after the camera opens, with the resolution/FPS the driver actually
@@ -99,7 +91,7 @@ public sealed class VideoEngine : IDisposable
         _workerThread.Start();
     }
 
-    /// <summary>Stops the processing thread and releases the camera and virtual camera handles.</summary>
+    /// <summary>Stops the processing thread and releases the camera.</summary>
     public void Stop()
     {
         if (!IsRunning)
@@ -113,7 +105,6 @@ public sealed class VideoEngine : IDisposable
         _cts?.Dispose();
         _cts = null;
         _workerThread = null;
-        _virtualCamWriter.Disconnect();
         IsRunning = false;
     }
 
@@ -176,7 +167,6 @@ public sealed class VideoEngine : IDisposable
             ResolutionStatusChanged?.Invoke(this, resolutionMessage);
 
             using Mat rawFrame = new();
-            DateTime lastVirtualCamStatusUpdate = DateTime.MinValue;
 
             while (!token.IsCancellationRequested)
             {
@@ -198,13 +188,9 @@ public sealed class VideoEngine : IDisposable
                     ? parameters
                     : parameters with { IsCalibrated = true, Beta = parameters.Beta + manualOffset };
 
-                using (Mat processedFrame = _imageProcessor.ProcessFrame(rawFrame, effectiveParameters))
-                {
-                    BitmapSource preview = MatImageConverter.ToBitmapSource(processedFrame);
-                    FrameReady?.Invoke(this, preview);
-
-                    PumpVirtualCamera(processedFrame, ref lastVirtualCamStatusUpdate);
-                }
+                using Mat processedFrame = _imageProcessor.ProcessFrame(rawFrame, effectiveParameters);
+                BitmapSource preview = MatImageConverter.ToBitmapSource(processedFrame);
+                FrameReady?.Invoke(this, preview);
             }
         }
         catch (Exception ex)
@@ -221,47 +207,6 @@ public sealed class VideoEngine : IDisposable
         }
     }
 
-    private static readonly TimeSpan VirtualCamHeartbeatInterval = TimeSpan.FromSeconds(3);
-
-    private void PumpVirtualCamera(Mat processedFrame, ref DateTime lastStatusUpdate)
-    {
-        if (!_virtualCamWriter.IsConnected)
-        {
-            if (DateTime.UtcNow - lastStatusUpdate < VirtualCamRetryInterval)
-            {
-                return;
-            }
-
-            lastStatusUpdate = DateTime.UtcNow;
-            bool connected = _virtualCamWriter.TryConnect();
-            VirtualCameraStatusChanged?.Invoke(this, connected
-                ? "Виртуальная камера подключена."
-                : "Виртуальная камера не найдена: " + (_virtualCamWriter.LastFailureReason
-                    ?? "откройте \"Unity Video Capture\" в Zoom/Teams/OBS, чтобы подключить."));
-
-            if (!connected)
-            {
-                return;
-            }
-        }
-
-        byte[] rgbaBytes = MatImageConverter.ToRgbaBytes(processedFrame, out int width, out int height);
-        if (!_virtualCamWriter.SendFrame(rgbaBytes, width, height))
-        {
-            VirtualCameraStatusChanged?.Invoke(this, "Соединение с виртуальной камерой потеряно ("
-                + (_virtualCamWriter.LastFailureReason ?? "неизвестная причина") + "), переподключаюсь...");
-            return;
-        }
-
-        // Periodic heartbeat so the UI shows live proof frames are actually flowing (rather
-        // than the person having to infer it indirectly from what the receiving app shows).
-        if (DateTime.UtcNow - lastStatusUpdate >= VirtualCamHeartbeatInterval)
-        {
-            lastStatusUpdate = DateTime.UtcNow;
-            VirtualCameraStatusChanged?.Invoke(this, $"Виртуальная камера подключена. Отправлено кадров: {_virtualCamWriter.FramesSent}.");
-        }
-    }
-
     private void RaiseError(Exception ex) => ErrorOccurred?.Invoke(this, ex);
 
     public void Dispose()
@@ -273,7 +218,6 @@ public sealed class VideoEngine : IDisposable
 
         Stop();
         _imageProcessor.Dispose();
-        _virtualCamWriter.Dispose();
         _disposed = true;
     }
 }

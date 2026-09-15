@@ -35,6 +35,16 @@ public sealed class CalibrationEngine
 
     /// <summary>Below this measured (pre-correction) face luminance, software correction alone is fighting a genuine lack of light - see <see cref="CalibrationParameters.SceneWasDark"/>.</summary>
     private const double DarkSceneLuminanceThreshold = 70.0;
+
+    /// <summary>
+    /// How long into the FaceExposure phase to wait before the software correction starts
+    /// accumulating its own luminance/contrast samples. The hardware auto-tune (driven from
+    /// the UI thread off this engine's per-frame measurements) adjusts the camera's own
+    /// Brightness/Gain during this same phase; sampling for software correction only after
+    /// giving it time to converge means the two layers target the post-hardware-adjustment
+    /// picture instead of averaging in stale pre-adjustment frames.
+    /// </summary>
+    private const double HardwareConvergenceSeconds = 3.0;
     private const double DefaultBilateralSigma = 35.0;
 
     // How much of the raw Gray-World correction to actually apply (0 = none, 1 = full).
@@ -139,6 +149,8 @@ public sealed class CalibrationEngine
         CalibrationParameters? completedParameters = null;
         CalibrationPhase phaseForEvent;
         double elapsedForEvent;
+        double? faceLuminanceForEvent = null;
+        double? noiseLevelForEvent = null;
 
         lock (_sync)
         {
@@ -167,7 +179,12 @@ public sealed class CalibrationEngine
                 case CalibrationPhase.FaceExposure:
                     if (faceThisFrame is { } exposureFace)
                     {
-                        SampleFaceExposure(rawBgrFrame, exposureFace);
+                        // Measure every frame (so the hardware controller gets continuous live
+                        // feedback for its own closed-loop adjustment), but only fold the
+                        // measurement into the software correction's own samples once the
+                        // hardware has had time to converge - see HardwareConvergenceSeconds.
+                        bool accumulateForSoftware = elapsed >= Phase1EndSeconds + HardwareConvergenceSeconds;
+                        faceLuminanceForEvent = SampleFaceExposure(rawBgrFrame, exposureFace, accumulateForSoftware);
                     }
                     if (elapsed >= Phase2EndSeconds)
                     {
@@ -176,7 +193,7 @@ public sealed class CalibrationEngine
                     break;
 
                 case CalibrationPhase.NoiseReduction:
-                    SampleNoise(rawBgrFrame);
+                    noiseLevelForEvent = SampleNoise(rawBgrFrame);
                     if (elapsed >= Phase3EndSeconds)
                     {
                         completedParameters = BuildFinalParameters();
@@ -199,7 +216,8 @@ public sealed class CalibrationEngine
 
         double progressPercent = elapsedForEvent / Phase3EndSeconds * 100.0;
         ProgressChanged?.Invoke(this, new CalibrationProgressEventArgs(
-            phaseForEvent, progressPercent, BuildStatusMessage(phaseForEvent, _anyFaceDetected), _anyFaceDetected));
+            phaseForEvent, progressPercent, BuildStatusMessage(phaseForEvent, _anyFaceDetected), _anyFaceDetected,
+            faceLuminanceForEvent, noiseLevelForEvent));
     }
 
     private void SampleWhiteBalance(Mat rawBgrFrame, Rect? faceToExclude)
@@ -215,23 +233,30 @@ public sealed class CalibrationEngine
         // estimate - BuildFinalParameters() falls back safely if this list ends up empty.
     }
 
-    private void SampleFaceExposure(Mat rawBgrFrame, Rect face)
+    private double SampleFaceExposure(Mat rawBgrFrame, Rect face, bool accumulateForSoftware)
     {
         (double luminance, double stdDev) = ImageProcessor.MeasureLuminance(rawBgrFrame, face);
-        _faceLuminanceSamples.Add(luminance);
-        _faceStdDevSamples.Add(stdDev);
 
-        Scalar faceColor = ImageProcessor.MeasureMeanColor(rawBgrFrame, face);
-        _faceMeanB.Add(faceColor.Val0);
-        _faceMeanG.Add(faceColor.Val1);
-        _faceMeanR.Add(faceColor.Val2);
+        if (accumulateForSoftware)
+        {
+            _faceLuminanceSamples.Add(luminance);
+            _faceStdDevSamples.Add(stdDev);
+
+            Scalar faceColor = ImageProcessor.MeasureMeanColor(rawBgrFrame, face);
+            _faceMeanB.Add(faceColor.Val0);
+            _faceMeanG.Add(faceColor.Val1);
+            _faceMeanR.Add(faceColor.Val2);
+        }
+
+        return luminance;
     }
 
-    private void SampleNoise(Mat rawBgrFrame)
+    private double SampleNoise(Mat rawBgrFrame)
     {
         Rect roi = _lastFaceRect ?? CenterRoi(rawBgrFrame.Size());
         double noise = ImageProcessor.EstimateNoiseLevel(rawBgrFrame, roi);
         _noiseSamples.Add(noise);
+        return noise;
     }
 
     private CalibrationParameters BuildFinalParameters()
@@ -346,9 +371,9 @@ public sealed class CalibrationEngine
     {
         CalibrationPhase.WhiteBalance => "Шаг 1/3: анализ баланса белого (фон, без учёта лица)...",
         CalibrationPhase.FaceExposure => faceDetected
-            ? "Шаг 2/3: лицо найдено, измеряю яркость и контраст кожи..."
+            ? "Шаг 2/3: подстраиваю яркость и контраст камеры под лицо в реальном времени..."
             : "Шаг 2/3: ищу лицо в кадре — смотрите в камеру...",
-        CalibrationPhase.NoiseReduction => "Шаг 3/3: оцениваю шум сенсора и настраиваю сглаживание...",
+        CalibrationPhase.NoiseReduction => "Шаг 3/3: настраиваю резкость, насыщенность и шумоподавление...",
         CalibrationPhase.Completed => "Автонастройка завершена.",
         _ => string.Empty
     };
