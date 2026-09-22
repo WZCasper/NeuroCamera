@@ -28,7 +28,7 @@ namespace NeuroCamera.Engine;
 ///     obsBrightness = beta / 255
 ///
 /// NeuroCamera does not adjust saturation or hue, so those are reported as OBS's own neutral
-/// defaults (0). White balance (the AWB gains) has no single-slider equivalent in OBS's Color
+/// defaults (0), and Opacity as its neutral 1.0 (see <see cref="NeutralOpacity"/>). White balance (the AWB gains) has no single-slider equivalent in OBS's Color
 /// Correction filter and is intentionally left out rather than guessed at.
 ///
 /// This is a close, source-derived approximation of visual equivalence, not a guaranteed
@@ -39,6 +39,15 @@ namespace NeuroCamera.Engine;
 /// </summary>
 public static class ObsEquivalentCalculator
 {
+    /// <summary>
+    /// OBS's current Color Correction filter (kind <c>color_filter_v2</c>) stores Opacity as a
+    /// 0.0-1.0 multiplier - its update function reads it with obs_data_get_double and puts it
+    /// straight into the colour matrix's alpha element, and its default is 1.0. (The obsolete
+    /// v1 filter used an integer 0-100 percentage instead.) Sending 100 to a v2 filter would
+    /// multiply every pixel by 100 and blow the picture out to white, so "no change" is 1.0.
+    /// </summary>
+    public const double NeutralOpacity = 1.0;
+
     public readonly record struct ObsColorCorrectionValues(
         double Gamma,
         double Contrast,
@@ -53,7 +62,7 @@ public static class ObsEquivalentCalculator
         double obsContrast = Math.Clamp(InvertObsStyle(parameters.Alpha), -4.0, 4.0);
         double obsBrightness = Math.Clamp(parameters.Beta / 255.0, -1.0, 1.0);
 
-        return new ObsColorCorrectionValues(obsGamma, obsContrast, obsBrightness, Saturation: 0.0, HueShift: 0.0, Opacity: 100.0);
+        return new ObsColorCorrectionValues(obsGamma, obsContrast, obsBrightness, Saturation: 0.0, HueShift: 0.0, Opacity: NeutralOpacity);
     }
 
     /// <summary>

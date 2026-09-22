@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Unit tests for the parts of NeuroCamera that do not need Windows, WPF, a camera or the native
+    OpenCV libraries. The product sources are linked in directly (instead of referencing the WPF
+    project) so the tests build and run anywhere and stay fast.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>NeuroCamera.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\NeuroCamera\Engine\SerialSessionRunner.cs" Link="Product\SerialSessionRunner.cs" />
+    <Compile Include="..\NeuroCamera\Engine\LatestValueMailbox.cs" Link="Product\LatestValueMailbox.cs" />
+    <Compile Include="..\NeuroCamera\Engine\FramePipelineMath.cs" Link="Product\FramePipelineMath.cs" />
+    <Compile Include="..\NeuroCamera\Engine\ObsEquivalentCalculator.cs" Link="Product\ObsEquivalentCalculator.cs" />
+    <Compile Include="..\NeuroCamera\Engine\ObsWebSocketClient.cs" Link="Product\ObsWebSocketClient.cs" />
+    <Compile Include="..\NeuroCamera\Engine\SettingsStore.cs" Link="Product\SettingsStore.cs" />
+    <Compile Include="..\NeuroCamera\Common\CrashLog.cs" Link="Product\CrashLog.cs" />
+    <Compile Include="..\NeuroCamera\Models\CalibrationParameters.cs" Link="Product\CalibrationParameters.cs" />
+    <Compile Include="..\NeuroCamera\Models\AppSettings.cs" Link="Product\AppSettings.cs" />
+    <Compile Include="..\NeuroCamera\Models\CaptureResolution.cs" Link="Product\CaptureResolution.cs" />
+  </ItemGroup>
+
+</Project>
