@@ -10,22 +10,31 @@ namespace NeuroCamera.Engine;
 /// settings file falls back to defaults (Load) or is silently skipped (Save) rather than
 /// ever throwing into the caller - persisted preferences are a convenience, not something
 /// that should be able to crash the app.
+///
+/// Saving writes to a temporary file and then atomically moves it over the real one, so a
+/// crash or power loss in the middle of a save can no longer leave a truncated settings.json
+/// (which would silently reset every preference, including the saved calibration).
 /// </summary>
 public static class SettingsStore
 {
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
+    private static readonly object SaveLock = new();
 
-    private static string FilePath => Path.Combine(
+    private static string DefaultFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "NeuroCamera", "settings.json");
 
-    public static AppSettings Load()
+    public static AppSettings Load() => Load(DefaultFilePath);
+
+    public static void Save(AppSettings settings) => Save(settings, DefaultFilePath);
+
+    internal static AppSettings Load(string path)
     {
         try
         {
-            if (File.Exists(FilePath))
+            if (File.Exists(path))
             {
-                string json = File.ReadAllText(FilePath);
+                string json = File.ReadAllText(path);
                 AppSettings? settings = JsonSerializer.Deserialize<AppSettings>(json, SerializerOptions);
                 if (settings is not null)
                 {
@@ -41,22 +50,41 @@ public static class SettingsStore
         return new AppSettings();
     }
 
-    public static void Save(AppSettings settings)
+    internal static void Save(AppSettings settings, string path)
+    {
+        lock (SaveLock)
+        {
+            string tempPath = path + ".tmp";
+
+            try
+            {
+                string? directory = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                string json = JsonSerializer.Serialize(settings, SerializerOptions);
+                File.WriteAllText(tempPath, json);
+                File.Move(tempPath, path, overwrite: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Best-effort - failing to save preferences should never interrupt the user.
+                TryDelete(tempPath);
+            }
+        }
+    }
+
+    private static void TryDelete(string path)
     {
         try
         {
-            string? directory = Path.GetDirectoryName(FilePath);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            string json = JsonSerializer.Serialize(settings, SerializerOptions);
-            File.WriteAllText(FilePath, json);
+            File.Delete(path);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch
         {
-            // Best-effort - failing to save preferences should never interrupt the user.
+            // Nothing more to do.
         }
     }
 }

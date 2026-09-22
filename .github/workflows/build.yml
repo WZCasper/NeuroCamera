@@ -21,10 +21,16 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: Run tests
+        shell: pwsh
+        run: |
+          dotnet test NeuroCamera.Tests/NeuroCamera.Tests.csproj -c Release --logger "console;verbosity=detailed" 2>&1 | Tee-Object -FilePath build-log.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Publish self-contained win-x64 build
         shell: pwsh
         run: |
-          dotnet publish NeuroCamera/NeuroCamera.csproj -c Release -r win-x64 --self-contained true -o publish 2>&1 | Tee-Object -FilePath build-log.txt
+          dotnet publish NeuroCamera/NeuroCamera.csproj -c Release -r win-x64 --self-contained true -o publish 2>&1 | Tee-Object -FilePath build-log.txt -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package as zip
@@ -47,7 +53,6 @@ jobs:
             Автоматическая сборка из коммита ${{ github.sha }}.
             Скачайте `NeuroCamera-win-x64.zip`, распакуйте и запустите `NeuroCamera.exe`.
             Отдельная установка .NET не требуется (self-contained сборка).
-            Для вывода в виртуальную камеру нужен драйвер UnityCapture — см. README.
           files: NeuroCamera-win-x64.zip
           prerelease: false
         env:

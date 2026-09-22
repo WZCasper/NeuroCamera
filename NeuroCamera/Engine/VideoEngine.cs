@@ -7,18 +7,24 @@ using OpenCvSharp;
 namespace NeuroCamera.Engine;
 
 /// <summary>
-/// Owns the entire capture -&gt; calibrate -&gt; correct -&gt; preview pipeline on a single dedicated
-/// background thread. Nothing in this class ever touches the WPF Dispatcher; it only raises
-/// plain .NET events, which callers marshal to the UI thread themselves. This guarantees the
-/// OpenCV work never runs on, and never blocks, the UI thread.
+/// Owns the entire capture -&gt; calibrate -&gt; correct -&gt; preview pipeline. Nothing in this class
+/// ever touches the WPF Dispatcher; it only raises plain .NET events, which callers marshal to
+/// the UI thread themselves. This guarantees the OpenCV work never runs on, and never blocks,
+/// the UI thread.
+///
+/// Camera sessions run through <see cref="SerialSessionRunner"/> rather than a single owned
+/// thread: opening a device (especially at 4K) can take longer than any reasonable timeout, so
+/// <see cref="Start"/> no longer waits for the previous session to finish before starting the
+/// next one - it hands both to the runner, which guarantees they never hold the camera at the
+/// same time without the caller ever blocking.
 /// </summary>
 public sealed class VideoEngine : IDisposable
 {
     private readonly ImageProcessor _imageProcessor;
     private readonly CalibrationEngine _calibrationEngine;
+    private readonly SerialSessionRunner _sessions = new();
+    private readonly LatestValueMailbox<BitmapSource> _previewMailbox = new();
 
-    private CancellationTokenSource? _cts;
-    private Thread? _workerThread;
     private volatile CalibrationParameters _currentParameters = CalibrationParameters.Neutral;
 
     // A quick, always-available brightness nudge on top of whatever calibration produced (or
@@ -37,15 +43,24 @@ public sealed class VideoEngine : IDisposable
             _currentParameters = parameters;
             CalibrationCompleted?.Invoke(this, parameters);
         };
+        _sessions.SessionFaulted += (_, ex) =>
+        {
+            CrashLog.Write("VideoEngine capture session", ex);
+            RaiseError(ex);
+        };
     }
 
-    /// <summary>True while the dedicated capture thread is alive.</summary>
-    public bool IsRunning { get; private set; }
+    /// <summary>True while a capture session is currently active (not stopped/superseded/finished).</summary>
+    public bool IsRunning => _sessions.IsActive;
 
     /// <summary>Current calibration parameters applied to every processed frame.</summary>
     public CalibrationParameters CurrentParameters => _currentParameters;
 
-    /// <summary>Raised on the background thread with each processed frame, ready for display.</summary>
+    /// <summary>
+    /// Raised on the UI thread's dispatcher timing (via <see cref="PumpPreview"/>) with the most
+    /// recently processed frame. Because it goes through a latest-value-wins mailbox, a consumer
+    /// that falls behind never queues up frames - it simply gets the newest one available.
+    /// </summary>
     public event EventHandler<BitmapSource>? FrameReady;
 
     /// <summary>Raised on the background thread as the 15-second auto-tune progresses.</summary>
@@ -64,48 +79,44 @@ public sealed class VideoEngine : IDisposable
     public event EventHandler<Exception>? ErrorOccurred;
 
     /// <summary>
-    /// Opens the given physical camera and starts the dedicated processing thread, requesting
-    /// the given resolution. Not every camera/driver supports every resolution (4K in
-    /// particular is far from universal on webcams) - the driver silently falls back to its
-    /// closest supported mode, so the actually negotiated size is read back and reported via
+    /// Opens the given physical camera and starts a new capture session, requesting the given
+    /// resolution. Not every camera/driver supports every resolution (4K in particular is far
+    /// from universal on webcams) - the driver silently falls back to its closest supported
+    /// mode, so the actually negotiated size is read back and reported via
     /// <see cref="ResolutionStatusChanged"/> instead of just assuming the request succeeded.
+    /// Returns immediately: opening the device happens on a background thread, and any previous
+    /// session is cancelled and guaranteed to fully release the camera before this one opens it.
     /// </summary>
     public void Start(int deviceIndex, int requestedWidth, int requestedHeight)
     {
-        if (IsRunning)
-        {
-            Stop();
-        }
-
-        _cts = new CancellationTokenSource();
-        CancellationToken token = _cts.Token;
-
-        _workerThread = new Thread(() => RunLoop(deviceIndex, requestedWidth, requestedHeight, token))
-        {
-            IsBackground = true,
-            Name = "NeuroCamera.VideoThread",
-            Priority = ThreadPriority.AboveNormal
-        };
-
-        IsRunning = true;
-        _workerThread.Start();
+        _calibrationEngine.Cancel();
+        _previewMailbox.Clear();
+        _sessions.Start(
+            token => RunLoop(deviceIndex, requestedWidth, requestedHeight, token),
+            "NeuroCamera.VideoThread",
+            ThreadPriority.AboveNormal);
     }
 
-    /// <summary>Stops the processing thread and releases the camera.</summary>
+    /// <summary>Stops the current capture session and releases the camera. Does not block.</summary>
     public void Stop()
     {
-        if (!IsRunning)
-        {
-            return;
-        }
-
         _calibrationEngine.Cancel();
-        _cts?.Cancel();
-        _workerThread?.Join(TimeSpan.FromSeconds(3));
-        _cts?.Dispose();
-        _cts = null;
-        _workerThread = null;
-        IsRunning = false;
+        _previewMailbox.Clear();
+        _sessions.Stop();
+    }
+
+    /// <summary>
+    /// Delivers the newest processed frame (if any arrived since the last call) via
+    /// <see cref="FrameReady"/>. Intended to be called at the UI's own pace (e.g. from a
+    /// CompositionTarget.Rendering or DispatcherTimer tick already on the UI thread) so a slow
+    /// UI thread only ever sees the latest frame instead of a growing backlog of stale ones.
+    /// </summary>
+    public void PumpPreview()
+    {
+        if (_previewMailbox.TryTake(out BitmapSource? frame))
+        {
+            FrameReady?.Invoke(this, frame);
+        }
     }
 
     /// <summary>Starts the automated 15-second calibration. The camera must already be running.</summary>
@@ -145,6 +156,11 @@ public sealed class VideoEngine : IDisposable
             {
                 capture.Dispose();
                 capture = new VideoCapture(deviceIndex);
+            }
+
+            if (token.IsCancellationRequested)
+            {
+                return;
             }
 
             if (!capture.IsOpened())
@@ -190,7 +206,8 @@ public sealed class VideoEngine : IDisposable
 
                 using Mat processedFrame = _imageProcessor.ProcessFrame(rawFrame, effectiveParameters);
                 BitmapSource preview = MatImageConverter.ToBitmapSource(processedFrame);
-                FrameReady?.Invoke(this, preview);
+                preview.Freeze();
+                _previewMailbox.Post(preview);
             }
         }
         catch (Exception ex)
@@ -217,6 +234,7 @@ public sealed class VideoEngine : IDisposable
         }
 
         Stop();
+        _sessions.WaitForIdle(TimeSpan.FromSeconds(5));
         _imageProcessor.Dispose();
         _disposed = true;
     }

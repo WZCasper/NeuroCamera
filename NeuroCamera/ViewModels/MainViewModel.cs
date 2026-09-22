@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using NeuroCamera.Common;
 using NeuroCamera.Engine;
 using NeuroCamera.Interop;
@@ -40,6 +41,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly VideoEngine _videoEngine;
     private readonly System.Windows.Threading.Dispatcher _dispatcher;
     private readonly AppSettings _settings;
+
+    // Pulls the newest processed frame out of VideoEngine's latest-value mailbox at a fixed,
+    // UI-controlled rate. Because the mailbox only ever holds the single newest frame, this
+    // is immune to the UI thread falling behind the capture rate: it simply shows whatever is
+    // newest on each tick instead of working through a growing backlog of stale frames.
+    private readonly DispatcherTimer _previewPumpTimer;
 
     private HardwareCameraController? _hardwareController;
     private ObsEquivalentCalculator.ObsColorCorrectionValues? _lastObsValues;
@@ -97,6 +104,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _videoEngine.CalibrationCompleted += OnCalibrationCompleted;
         _videoEngine.ResolutionStatusChanged += OnResolutionStatusChanged;
         _videoEngine.ErrorOccurred += OnErrorOccurred;
+
+        // ~30 pumps/sec: enough for a smooth preview without doing more UI work than the
+        // window can actually show. Runs regardless of IsStreaming - PumpPreview is a no-op
+        // whenever nothing new has arrived, so idling it costs essentially nothing.
+        _previewPumpTimer = new DispatcherTimer(DispatcherPriority.Render, _dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(33)
+        };
+        _previewPumpTimer.Tick += (_, _) => _videoEngine.PumpPreview();
+        _previewPumpTimer.Start();
 
         if (_settings.LastCalibration is { IsCalibrated: true } savedCalibration)
         {
@@ -178,6 +195,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
             if (IsStreaming && SelectedCamera is not null)
             {
+                CancelCalibrationForRestart();
                 _videoEngine.Start(SelectedCamera.Index, value.Width, value.Height);
                 RefreshHardwareControls(SelectedCamera.Index);
             }
@@ -381,6 +399,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _videoEngine.Start(SelectedCamera.Index, SelectedResolution.Width, SelectedResolution.Height);
         IsStreaming = true;
         RefreshHardwareControls(SelectedCamera.Index);
+    }
+
+    /// <summary>
+    /// Resets calibration UI state before switching camera or resolution while streaming.
+    /// <see cref="VideoEngine.Start"/> always cancels any calibration in progress on the engine
+    /// side (a new capture session makes an in-progress calibration meaningless - it was
+    /// measuring the previous device/resolution's frames), but without this the view model's own
+    /// <see cref="IsCalibrating"/> flag stayed true, leaving the progress UI and the Автонастройка
+    /// button's enabled state stuck as if calibration were still running.
+    /// </summary>
+    private void CancelCalibrationForRestart()
+    {
+        if (!IsCalibrating)
+        {
+            return;
+        }
+
+        _videoEngine.CancelCalibration();
+        IsCalibrating = false;
+        CalibrationStatusText = "Автонастройка прервана — камера или разрешение были изменены.";
     }
 
     private void RunAutoTune()
@@ -684,8 +722,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void PersistSettings() => SettingsStore.Save(_settings);
 
-    private void OnFrameReady(object? sender, BitmapSource frame) =>
-        _dispatcher.BeginInvoke(() => PreviewFrame = frame);
+    // Raised by VideoEngine.PumpPreview, which this view model only ever calls from the
+    // _previewPumpTimer tick - i.e. already on the UI thread - so no further marshalling is
+    // needed here (unlike the other VideoEngine events below, which do arrive on the
+    // background capture thread and still need BeginInvoke).
+    private void OnFrameReady(object? sender, BitmapSource frame) => PreviewFrame = frame;
 
     private void OnCalibrationProgressChanged(object? sender, CalibrationProgressEventArgs e) =>
         _dispatcher.BeginInvoke(() =>
@@ -751,6 +792,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        _previewPumpTimer.Stop();
         _hardwareController?.Dispose();
         _videoEngine.Dispose();
         _disposed = true;
