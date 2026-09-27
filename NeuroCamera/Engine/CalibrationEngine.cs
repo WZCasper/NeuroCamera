@@ -281,6 +281,7 @@ public sealed class CalibrationEngine
         double gamma = ImageProcessor.SolveGammaForTargetLuminance(currentLuminance, TargetFaceLuminance);
         double alpha = Math.Clamp(TargetFaceContrastStdDev / Math.Max(currentStdDev, 1.0), 0.85, 1.35);
         double beta = Math.Clamp(TargetFaceLuminance * (1.0 - alpha), -80.0, 80.0);
+        beta = CalibrationSafeguards.RaiseBetaToProtectShadows(gamma, alpha, beta);
 
         double avgNoise = _noiseSamples.Count > 0 ? _noiseSamples.Average() : DefaultBilateralSigma;
         int bilateralDiameter = (int)Math.Clamp(Math.Round(5 + (avgNoise / 8.0)), 5, 9);
@@ -306,10 +307,11 @@ public sealed class CalibrationEngine
 
     /// <summary>
     /// Turns the accumulated background samples into final white-balance gains: raw
-    /// Gray-World gains -> damped -> tightly clamped -> checked against the measured face
-    /// color and damped further (or dropped to neutral) if the result would not look like a
-    /// plausible skin tone. Every stage only ever pulls the result *toward* neutral (1.0),
-    /// never away from it, so the worst case is simply "less correction applied".
+    /// Gray-World gains -> reduced by how non-neutral the background itself looks -> damped ->
+    /// tightly clamped -> checked against the measured face color and damped further (or
+    /// dropped to neutral) if the result would not look like a plausible skin tone. Every
+    /// stage only ever pulls the result *toward* neutral (1.0), never away from it, so the
+    /// worst case is simply "less correction applied".
     /// </summary>
     private (double GainB, double GainG, double GainR) ComputeWhiteBalanceGains()
     {
@@ -328,6 +330,20 @@ public sealed class CalibrationEngine
         double rawGainB = grayTarget / meanB;
         double rawGainG = grayTarget / meanG;
         double rawGainR = grayTarget / meanR;
+
+        // Gray-World's entire premise is "the background averages out to neutral gray". That
+        // holds for typical rooms (walls, furniture - a mix of colors) but is simply false for
+        // a single strongly colored backdrop (a red/green/blue streaming curtain, colored LED
+        // lighting): there the algorithm has nothing to average out, so it reads the backdrop's
+        // real color as a "cast" and drives the gains toward fully neutralizing it - which
+        // shows up as skin pushed toward the opposite hue (a red backdrop -> green/cyan skin).
+        // CalibrationSafeguards.BackgroundColorTrust is 1.0 for a normal mixed-color background
+        // (no change from before) and fades to 0.0 (gains pulled all the way to neutral) as the
+        // background itself gets more saturated - see that method's doc comment for the ramp.
+        double trust = CalibrationSafeguards.BackgroundColorTrust(meanB, meanG, meanR);
+        rawGainB = 1.0 + ((rawGainB - 1.0) * trust);
+        rawGainG = 1.0 + ((rawGainG - 1.0) * trust);
+        rawGainR = 1.0 + ((rawGainR - 1.0) * trust);
 
         double gainB = Math.Clamp(Damp(rawGainB), MinGain, MaxGain);
         double gainG = Math.Clamp(Damp(rawGainG), MinGain, MaxGain);
