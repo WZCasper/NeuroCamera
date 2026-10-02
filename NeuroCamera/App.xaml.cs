@@ -20,6 +20,23 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
     }
 
+    // Belt-and-braces process exit: WPF's own shutdown (ShutdownMode="OnMainWindowClose")
+    // closes every window and ends the Dispatcher message loop, which is normally enough for
+    // the process to exit on its own once Main() returns. In practice this app also opens
+    // native/COM resources outside the CLR's control - DirectShow camera filters via COM RCWs
+    // (HardwareCameraController), OpenCvSharp's native VideoCapture/Mat handles, and a
+    // dedicated capture thread. If any of those is momentarily slow to let go (a COM object
+    // still being finalized, a native call not yet returned), the managed runtime can be left
+    // waiting and the process lingers in Task Manager after the window has visually closed.
+    // Forcing the exit here removes that dependency entirely: once WPF's own shutdown sequence
+    // has run (so MainWindow.Closing/Closed had their chance to release resources cleanly),
+    // the process is guaranteed to actually end.
+    protected override void OnExit(ExitEventArgs e)
+    {
+        base.OnExit(e);
+        Environment.Exit(e.ApplicationExitCode);
+    }
+
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs args)
     {
         CrashLog.Write("UI thread (DispatcherUnhandledException)", args.Exception);
