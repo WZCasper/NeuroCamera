@@ -226,6 +226,18 @@ public sealed class VideoEngine : IDisposable
 
     private void RaiseError(Exception ex) => ErrorOccurred?.Invoke(this, ex);
 
+    /// <summary>
+    /// Requests cancellation of the capture session and arranges for <see cref="_imageProcessor"/>
+    /// to be disposed once the capture thread has actually finished using it. Deliberately does
+    /// not block the calling thread: that capture thread is a background thread (see
+    /// <see cref="SerialSessionRunner.Start"/>) that winds down on its own once the native
+    /// <c>VideoCapture.Read</c> call returns and it observes the cancellation token, but that can
+    /// take a moment - blocking here, e.g. from <c>Window.Closing</c>, would freeze window close
+    /// for however long that native call takes to return. Waiting for it on a separate background
+    /// thread instead avoids both the freeze and a use-after-dispose race on <c>_imageProcessor</c>.
+    /// The app's own shutdown (see <c>App.OnExit</c>) guarantees the process exits promptly either
+    /// way, regardless of how long this takes.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed)
@@ -234,8 +246,20 @@ public sealed class VideoEngine : IDisposable
         }
 
         Stop();
-        _sessions.WaitForIdle(TimeSpan.FromSeconds(5));
-        _imageProcessor.Dispose();
+
+        var sessions = _sessions;
+        var imageProcessor = _imageProcessor;
+        var thread = new Thread(() =>
+        {
+            sessions.WaitForIdle(TimeSpan.FromSeconds(5));
+            imageProcessor.Dispose();
+        })
+        {
+            IsBackground = true,
+            Name = "NeuroCamera.VideoEngineShutdown"
+        };
+        thread.Start();
+
         _disposed = true;
     }
 }
